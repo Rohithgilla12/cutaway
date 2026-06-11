@@ -229,7 +229,7 @@ export default function PoolViz() {
         }}
       >
         <span style={{ color: "var(--color-muted)", fontSize: 10 }}>MODE</span>
-        <div role="radiogroup" aria-label="Pool mode" style={{ display: "flex", gap: 8 }}>
+        <div role="radiogroup" aria-label="Pool mode" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
           {(["session", "transaction", "statement"] as PoolMode[]).map((m) => (
             <button
               key={m}

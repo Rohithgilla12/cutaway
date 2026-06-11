@@ -300,3 +300,12 @@ actual sim core (seed `0xc0ffee`) via a throwaway vitest harness; results quoted
 
 Per the skill's Step 5, the human must review and approve this checklist before publishing. The
 explainer remains `draft: true` in frontmatter; this checklist is the artifact for that review.
+
+## Edge-state QA (2026-06-11)
+
+Exercised in a real browser (built site, Playwright): default session-mode state already teaches (8 clients pinning 3
+servers → waiters time out); staged the prepared-statement break in 4 presses (transaction → pool_size 2 → PREPARE on
+→ load HIGH) — exact error string filled the event log, prepared_missing climbed in danger red, per-client S_1 chips
+visible per server; wait-queue FIFO annotation correct; 360px layout clean after a mode-radiogroup flex-wrap fix
+applied during QA; zero console errors/warnings. Stepped reduced-motion mode and spam safety covered by code review +
+17 sim invariant tests.
