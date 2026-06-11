@@ -33,13 +33,14 @@ export function NodePanel({ nodes, onKill, onRestart }: Props) {
             style={{
               display: "flex",
               alignItems: "center",
+              flexWrap: "wrap",
               gap: 8,
               padding: "3px 0",
               color: rowColor,
               opacity: dead ? 0.65 : 1,
             }}
           >
-            <span style={{ minWidth: 128, flexShrink: 0 }}>
+            <span style={{ minWidth: 128 }}>
               n{n.id} · {roleLabel} · term {n.currentTerm} · {votedStr} · log {n.log.length} · commit {n.commitIndex}
             </span>
             <VizButton

@@ -298,3 +298,12 @@ Sources section present and honest.
 
 - None blocking. The sim, viz, and controls match the prose as written. The only fragility is
   the seed-dependent Split 2/3 caption documented above; it is correct for the shipped seed.
+
+## Edge-state QA (2026-06-11)
+
+Exercised in a real browser (built site, Playwright): election fires once the figure scrolls into view (offscreen rAF
+pause works as designed); Isolate leader produced the two-leaders state (n1 term 1 minority vs n3 term 2, 3/5 votes)
+with the persistent annotation; Heal all produced "n1 sees term 2, steps down"; link cut/heal buttons are
+keyboard-reachable with aria-labels; 360px layout wraps cleanly after a NodePanel flex-wrap fix (commit counter was
+clipped — fixed during QA); zero console errors/warnings. Stepped reduced-motion mode and spam safety covered by code
+review + 17 sim invariant tests.
