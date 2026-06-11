@@ -42,13 +42,15 @@ function initialSim(): WalSim {
 
 export default function WalViz() {
   const simRef = useRef<WalSim>(initialSim());
+  // m4: reading simRef.current in useState lazy initializer triggers react-hooks/refs;
+  // keeping two-instance pattern (second sim is created only for its initial snapshot).
   const [snap, setSnap] = useState<WalSnapshot>(() => createWalSim(SEED).snapshot());
   const [paused, setPaused] = useState(false);
   const [speed, setSpeed] = useState<0.5 | 1 | 2>(1);
   const reducedMotion = useReducedMotion();
   const rootRef = useRef<HTMLDivElement>(null);
   const visibleRef = useRef(true);
-  const hiddenRef = useRef(false);
+  const hiddenRef = useRef(typeof document !== "undefined" ? document.hidden : false);
 
   useEffect(() => {
     setSnap(simRef.current.snapshot());
@@ -216,7 +218,7 @@ export default function WalViz() {
 
       {snap.phase === "crashed" && (
         <div
-          role="status"
+          aria-hidden="true"
           style={{
             marginTop: 8,
             padding: "8px 10px",

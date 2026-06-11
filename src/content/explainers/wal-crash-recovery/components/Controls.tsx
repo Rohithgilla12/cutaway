@@ -42,7 +42,7 @@ const BTN_PRIMARY: React.CSSProperties = {
 const BTN_DANGER: React.CSSProperties = {
   ...BTN_BASE,
   background: "var(--color-danger)",
-  color: "#fff",
+  color: "var(--color-paper)",
   border: "1px solid var(--color-danger)",
 };
 
