@@ -44,7 +44,7 @@ three meters at once).
   cascades L0→L1→…→L6, each level ~10× the one above. The dynamics of a cascade
   (where bytes spend most of their rewrite budget — the lower, larger levels) is
   a "where write amplification actually comes from" piece.
-- **Bloom filters, in depth.** The draft explains *that* they cut read
+- **Bloom filters, in depth.** The draft explains _that_ they cut read
   amplification below file count (~10 bits/key, ~1% FP). Not covered: the math of
   bits-per-key vs FP rate, why ~10 bits is the knee of the curve, whole-key vs
   prefix blooms, and ribbon filters as the modern lower-overhead replacement.

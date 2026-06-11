@@ -8,6 +8,7 @@ draft: false
 
 import Figure from "../../../components/Figure.astro";
 import LsmViz from "./components/LsmViz";
+import BloomViz from "./components/BloomViz";
 
 You are ingesting an event stream into a B-tree-backed table and the throughput graph is flat at 5,000 rows per second. The SSD underneath is rated for ten times that on sequential writes and its utilization sits at twenty percent. Nothing is saturated, yet the writer will not go faster. The bottleneck is not bandwidth — it is that every insert lands on a random page, and random writes are the one access pattern that turns a fast disk into a slow one.
 
@@ -75,6 +76,16 @@ L0 compaction fires at **`level0_file_num_compaction_trigger`**, default 4 — t
 
 The single biggest reason the sim's read amplification is pessimistic is that it has no bloom filters. RocksDB attaches a bloom filter to each SSTable — by default 10 bits per key, for roughly a 1% false-positive rate — and a point lookup checks the filter before touching the file. If the filter says the key is definitely absent, the file is skipped without a read. So in production a point read probes only the handful of files that might actually hold the key, and read amplification sits far below the file count, even with many overlapping L0 files. The sim deliberately omits blooms so that file pile-up is visible as rising read amplification; that omission is labeled in the SIMPLIFICATIONS list.
 
+The figure below is the bloom filter mechanism in miniature. Add a few keys to set bits in the 64-bit array, then probe members and non-members to see the three-position check in action. Query non-members repeatedly until you land a false positive — all three probed bits happen to be set by earlier keys, so the filter cannot rule the key out and the SSTable would be read for nothing. Members never miss; the counter stays at zero no matter how many you query.
+
+<Figure
+  number={2}
+  label="bloom filter"
+  caption="Coach: query non-members until you land a false positive — and notice members never miss. At ~12 keys the false-positive rate sits around 12%; reset and the bit array clears back to zero."
+>
+  <BloomViz client:visible />
+</Figure>
+
 One architectural fork worth a sentence: the default here is **leveled** compaction, which keeps each level a single non-overlapping sorted run and pays more write amplification to hold read and space amplification down. RocksDB also offers **universal** (size-tiered) compaction, which merges similarly-sized runs and cuts write amplification at the cost of higher read and space amplification — the same three knobs, turned the other way. Cassandra and ScyllaDB default to tiered strategies for the same write-amplification reason.
 
 A few more deliberate simplifications, all in the SIMPLIFICATIONS list and labeled where they matter: there is **no write-ahead log** here, so an unflushed memtable would not survive a crash — a real engine logs every memtable mutation first, which is the durability half of the story told in [explainer #1](/wal-crash-recovery/). The tree is **only L0 and L1**, not L0 through L6. The thresholds are **tiny** so every key and file is visible. And compaction here merges **all** L0 files with the whole of L1 and re-partitions by even key-range splitting, rather than RocksDB's pick of only the overlapping subset by target file size — the event log still reports how many L1 files genuinely overlapped.
@@ -91,6 +102,6 @@ Whichever you run, the two numbers to put on a dashboard are pending compaction 
 - RocksDB source, [`include/rocksdb/options.h`](https://github.com/facebook/rocksdb/blob/main/include/rocksdb/options.h) and [`include/rocksdb/advanced_options.h`](https://github.com/facebook/rocksdb/blob/main/include/rocksdb/advanced_options.h) — `write_buffer_size` 64 MB, `level0_file_num_compaction_trigger` 4, `max_bytes_for_level_base` 256 MB, `max_bytes_for_level_multiplier` 10, `max_write_buffer_number` 2.
 - RocksDB wiki, [RocksDB Bloom Filter](https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter) — ~10 bits per key for roughly a 1% false-positive rate, letting a point lookup skip SSTables that provably lack the key.
 - RocksDB wiki, [Universal Compaction](https://github.com/facebook/rocksdb/wiki/Universal-Compaction) — tiered compaction lowers write amplification at the cost of higher read and space amplification versus leveled.
-- Martin Kleppmann, *Designing Data-Intensive Applications*, ch. 3 — SSTables, LSM trees, and the LSM-versus-B-tree comparison.
-- Alex Petrov, *Database Internals*, Part I — LSM storage, memtable/SSTable flush, compaction, and read/write/space amplification.
+- Martin Kleppmann, _Designing Data-Intensive Applications_, ch. 3 — SSTables, LSM trees, and the LSM-versus-B-tree comparison.
+- Alex Petrov, _Database Internals_, Part I — LSM storage, memtable/SSTable flush, compaction, and read/write/space amplification.
 - [LevelDB documentation](https://github.com/google/leveldb/blob/main/doc/impl.md) — the memtable/log/SSTable structure and level compaction the RocksDB lineage descends from.

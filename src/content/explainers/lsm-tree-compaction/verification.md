@@ -10,6 +10,7 @@ Legend: ✅ verified (source + confirming text) · ⚠️ simplification (must b
 prose — checked it IS) · ❌ wrong/unverifiable (fixed or cut).
 
 Primary sources used:
+
 - RocksDB wiki, Leveled Compaction: https://github.com/facebook/rocksdb/wiki/Leveled-Compaction
 - RocksDB wiki, RocksDB Bloom Filter: https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter
 - RocksDB wiki, Universal Compaction: https://github.com/facebook/rocksdb/wiki/Universal-Compaction
@@ -188,7 +189,7 @@ Primary sources used:
     ✅ Matches sim compactionPressure = `l0FileCount >= L0_COMPACTION_THRESHOLD` (4),
     tested. LevelDiagram lights the pending-colored band + LsmViz "compaction pressure" label.
     ❌→FIXED: draft said "four is the threshold the sim flushes at" — wrong (flush threshold
-    is 8; four is the L0 *compaction* trigger). Corrected. See Corrections #2.
+    is 8; four is the L0 _compaction_ trigger). Corrected. See Corrections #2.
 
 29. **"readAmp last counter climbs past six and turns red" as L0 piles up with auto-compact
     off.**
@@ -254,7 +255,7 @@ Primary sources used:
    so "hash-and-insert" was self-contradictory and wrong about the data structure.
 
 2. **"four is the threshold the sim flushes at" → "four is the L0 compaction threshold"**
-   (claim 28). The flush threshold is 8 (MEMTABLE_FLUSH_THRESHOLD); four is the L0 *compaction*
+   (claim 28). The flush threshold is 8 (MEMTABLE*FLUSH_THRESHOLD); four is the L0 \_compaction*
    trigger (L0_COMPACTION_THRESHOLD). The draft conflated the two thresholds.
 
 3. **Tombstone experiment de-targeted to match random controls** (claim 33). Delete →
