@@ -1,0 +1,42 @@
+---
+title: "How durable workflow engines replay history"
+description: "When a durable workflow worker crashes mid-execution, the engine replays recorded history to reconstruct local state — without re-executing side-effects. Run the workflow, crash the worker, then replay step-by-step to see why determinism is a hard constraint."
+number: 4
+pubDate: 2026-06-11
+draft: true
+---
+
+import Figure from "../../../components/Figure.astro";
+import ReplayViz from "./components/ReplayViz";
+
+A durable workflow engine — Temporal, Cadence, AWS Step Functions, or Durable Functions — promises that a workflow function survives crashes. If the worker process dies halfway through, the engine restarts it and the function picks up where it left off. The local variable `amount` is still 142. The `reserved` flag is still `true`. None of the completed activities re-execute.
+
+That promise rests on a single mechanism: **deterministic replay**. Every side-effect the workflow produces — scheduling activities, starting timers, completing the workflow — is recorded in an append-only event history. On restart, a fresh worker re-executes the workflow function from the top, but instead of running activities for real, it feeds the recorded results back in from history. The function reconstructs the same local state it had before the crash, without touching any external system a second time.
+
+The figure below makes this observable. The event history tape at the top accumulates every event the server records. The code panel shows which line the workflow function is currently executing and what its local variables contain. The comparison strip is the engine's internal bookkeeping during replay: for each command the replaying code emits, it checks whether that command matches what history recorded. A match means the replay is on track; a mismatch is a nondeterminism error, and the workflow halts permanently.
+
+<Figure number={1} label="event history replay" caption="Press Run, then Crash worker mid-execution. Use Replay step (or Replay all) to watch history reconstruct local state. Toggle Inject time.Now() to introduce nondeterminism and crash after chargeCard completes to see detection fire.">
+  <ReplayViz client:visible />
+</Figure>
+
+## The replay contract
+
+Replay only works if the workflow function is deterministic: given the same sequence of recorded results, it must emit the same sequence of commands. This means workflow code cannot:
+
+- Call `time.Now()`, `Math.random()`, or any source of entropy directly — those values differ between runs.
+- Read external state (a database, an environment variable, a feature flag) that might change between the original run and replay.
+- Spawn goroutines or threads whose scheduling is nondeterministic.
+
+Any of those breaks the match guarantee. When the replaying code emits a command that does not match what history recorded at that slot, the engine surfaces a nondeterminism error, retries forever, and the workflow is stuck until a human intervenes with a fix.
+
+## The history edge
+
+There is one edge case worth understanding. Replay can only detect divergence when there is a recorded command-producing event to match against. If the worker crashes before a command event has been written to history — for example, before `chargeCard` is even scheduled — a replay with injected nondeterminism has nothing to contradict and completes cleanly. This is not a bug in the engine; it is a consequence of what "durable" means: the engine preserves state that was actually recorded. State that never reached the server is gone.
+
+The figure surfaces this explicitly. Crash very early (before the first activity completes) with injection on: replay completes without a mismatch and annotates why. Crash after `chargeCard` completes and the recorded amount is in history: now the mismatch fires, the comparison strip shows the divergent commands in red, and the nondeterminism error names the specific event that was violated.
+
+## Why local variables survive
+
+The "(from history)" annotation in the code panel is the whole point. During the original run, `amount = await chargeCard()` suspends the function, the activity runs against a real payment processor, and the result is recorded in history as part of the `ActivityTaskCompleted` event. During replay, that yield resumes immediately with the recorded value — no payment processor involved. The function continues from the same state it was in, with the same `amount`, because the engine handed it the same number back.
+
+This is also why activity execution count stays flat during replay. The activityExecCount stat does not increment while the status is `replaying`. It only climbs during live forward execution past the history edge, where new side-effects actually run.
