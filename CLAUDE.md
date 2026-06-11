@@ -42,5 +42,8 @@ visualization → prose → verification → QA) is non-negotiable.
 
 ## Deploy
 
-Cloudflare Pages, git integration: push to `main` deploys production (cutaway.gilla.fun); other branches get preview
-deploys. Build command `pnpm build`, output `dist/`.
+Cloudflare Workers Builds, git-connected: push to `main` builds (`pnpm build`) and deploys production
+(cutaway.gilla.fun). The committed `wrangler.jsonc` is load-bearing — it defines an assets-only Worker (`dist/`,
+404-page handling) and overrides Cloudflare's auto-generated Astro config, which otherwise tries to provision a
+SESSION KV namespace and fails on every rebuild. Node and pnpm versions are pinned via `.node-version` and
+`packageManager` in package.json.
