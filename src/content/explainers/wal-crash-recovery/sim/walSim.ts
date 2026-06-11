@@ -192,11 +192,7 @@ export function createWalSim(seed: number): WalSim {
 
   function ackDurableTxns(): void {
     for (const t of txns) {
-      if (
-        t.status === "in-flight" &&
-        t.commitLsn !== undefined &&
-        t.commitLsn <= lastDurableLsn
-      ) {
+      if (t.status === "in-flight" && t.commitLsn !== undefined && t.commitLsn <= lastDurableLsn) {
         t.status = "acked";
       }
     }
@@ -331,8 +327,7 @@ export function createWalSim(seed: number): WalSim {
     for (const t of txns) {
       if (t.commitLsn === undefined) continue;
       const commitRec = records.find((r) => r.lsn === t.commitLsn);
-      const commitDurable =
-        commitRec !== undefined && t.commitLsn <= lastDurableLsn && !commitRec.torn;
+      const commitDurable = commitRec !== undefined && t.commitLsn <= lastDurableLsn && !commitRec.torn;
       if (!commitDurable) {
         if (t.status === "acked") t.status = "lost";
         else if (t.status === "in-flight") t.status = "lost";
@@ -395,8 +390,7 @@ export function createWalSim(seed: number): WalSim {
     for (const t of txns) {
       if (t.commitLsn === undefined) continue;
       const commitRec = records.find((r) => r.lsn === t.commitLsn);
-      const commitDurable =
-        commitRec !== undefined && t.commitLsn <= lastDurableLsn && !commitRec.torn;
+      const commitDurable = commitRec !== undefined && t.commitLsn <= lastDurableLsn && !commitRec.torn;
       t.status = commitDurable ? "survived" : "lost";
     }
     phase = "recovered";
@@ -422,9 +416,7 @@ export function createWalSim(seed: number): WalSim {
     currentReplayLsn = r.lsn;
     if (r.kind === "update") {
       applyRecord(r);
-      recoveryLog.push(
-        `LSN ${r.lsn} update page ${r.pageId} = ${r.value} (txn ${r.txid}) — replayed`,
-      );
+      recoveryLog.push(`LSN ${r.lsn} update page ${r.pageId} = ${r.value} (txn ${r.txid}) — replayed`);
     } else if (r.kind === "commit") {
       recoveryLog.push(`LSN ${r.lsn} commit txn ${r.txid} — replayed`);
     } else {

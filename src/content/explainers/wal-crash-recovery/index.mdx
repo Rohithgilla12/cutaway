@@ -8,6 +8,7 @@ draft: false
 
 import Figure from "../../../components/Figure.astro";
 import WalViz from "./components/WalViz";
+import NaiveVsWalViz from "./components/NaiveVsWalViz";
 
 Your application sent `COMMIT`, the database answered with a success tag, and the framework reported one row written. Three milliseconds later the machine lost power. When it boots back up, is the row there?
 
@@ -31,6 +32,16 @@ There is a worse failure hiding underneath both. A page is 8 KB; the disk persis
 
 So the naive approach forces a choice between slow, lossy, or corrupt. The log exists to refuse that choice.
 
+The cost is not abstract. Each commit in the naive lane queues behind every page fsync from the commits already in flight — random writes, serialized. The WAL lane absorbs the same commit stream with one sequential append per window, so every commit that arrives while a flush is in flight rides it for free.
+
+<Figure
+  number={2}
+  label="fsync per page vs append"
+  caption="Set rate to 200/s and watch the left queue climb while the right drains."
+>
+  <NaiveVsWalViz client:visible />
+</Figure>
+
 ## The real mechanism
 
 Invert the order. Before touching the home location of any page, append a record describing the change to a log that only ever grows at the end. The log is sequential, so flushing it is one append-and-fsync, not a scatter of random writes. Once that fsync returns, the change is durable — recoverable — even though the actual data pages have not moved. Only then do you acknowledge the commit. The home pages get written back later, lazily, in the background or at a checkpoint.
@@ -43,7 +54,11 @@ Three rules fall out of that inversion, and they are the whole idea:
 
 The figure below is a single WAL writer doing exactly this. The strip is the log, newest records on the right, each block a `begin` (B), `update` (U), or `commit` (C). Green means durable, amber means appended-but-not-yet-fsynced, and the dashed green line is the durable boundary — everything left of it has survived an fsync. The grid underneath is the eight data pages, each showing its in-memory value against its on-disk value; when those disagree, the disk is stale and the log is carrying the difference.
 
-<Figure number={1} label="write-ahead log" caption="Toggle fsync = off, press Commit a few times, then Crash — watch the lost counter climb.">
+<Figure
+  number={1}
+  label="write-ahead log"
+  caption="Toggle fsync = off, press Commit a few times, then Crash — watch the lost counter climb."
+>
   <WalViz client:visible />
 </Figure>
 
@@ -57,7 +72,7 @@ That is the trade the WAL buys you: durability per commit at the amortized cost 
 
 ## Failure modes and recovery
 
-A crash is not a clean line. The interesting case is a crash *during* a flush, when the log's tail is half-written.
+A crash is not a clean line. The interesting case is a crash _during_ a flush, when the log's tail is half-written.
 
 Press **Crash** while a flush is in flight (easiest with **Load** on, so there is usually one mid-write). The first record of that flush — the lowest-LSN one the fsync was persisting — may turn red. Its bytes reached the platter, so it sits at or under the durable boundary, but it is torn: a partial write with a CRC that no longer matches. Every WAL record carries a CRC-32C checksum, set on write and verified on read, precisely so recovery can tell a complete record from a torn one.
 
@@ -83,7 +98,7 @@ The sim is the shape of the mechanism; Postgres is the mechanism with thirty yea
 
 **`wal_buffers`** is the shared-memory staging area for WAL records before they are written to disk — the amber zone in the figure. It defaults to `-1`, which auto-tunes to about 1/32 of `shared_buffers`, clamped between 64 KB and one WAL segment (typically 16 MB).
 
-**`synchronous_commit`** is the ack-after-fsync rule, exposed as a knob. At the default `on`, a commit waits for its WAL record to be flushed to durable storage before returning. Set it to `off` and the commit returns without waiting for that flush. Here is the part people get wrong: `synchronous_commit = off` is *not* the fsync-nothing corruption case. The Postgres docs are explicit that, unlike turning off `fsync`, it "does not create any risk of database inconsistency" — a crash can lose recently acknowledged transactions, but the database comes back consistent, as if those transactions had aborted cleanly. The loss window is bounded: at most three times `wal_writer_delay`, which defaults to 200 ms, so under 600 ms of commits at risk. That is a real, bounded data-loss window with no corruption — a very different bet from the naive fsync-nothing footgun in the figure, which loses writes silently and gives you no consistency guarantee at all.
+**`synchronous_commit`** is the ack-after-fsync rule, exposed as a knob. At the default `on`, a commit waits for its WAL record to be flushed to durable storage before returning. Set it to `off` and the commit returns without waiting for that flush. Here is the part people get wrong: `synchronous_commit = off` is _not_ the fsync-nothing corruption case. The Postgres docs are explicit that, unlike turning off `fsync`, it "does not create any risk of database inconsistency" — a crash can lose recently acknowledged transactions, but the database comes back consistent, as if those transactions had aborted cleanly. The loss window is bounded: at most three times `wal_writer_delay`, which defaults to 200 ms, so under 600 ms of commits at risk. That is a real, bounded data-loss window with no corruption — a very different bet from the naive fsync-nothing footgun in the figure, which loses writes silently and gives you no consistency guarantee at all.
 
 **Group commit** is `commit_delay` and `commit_siblings`. `commit_delay` (microseconds, default 0) tells a committing transaction to pause briefly before flushing, so that other commits in flight can join the same fsync — exactly the counter divergence you watched under Load. `commit_siblings` (default 5) gates that delay so it only kicks in when at least that many transactions are already open, since there is no one to batch with on an idle system.
 
@@ -100,5 +115,5 @@ If you can tolerate losing the last few hundred milliseconds of commits on a cra
 - PostgreSQL documentation, [Write-Ahead Logging (WAL)](https://www.postgresql.org/docs/current/wal-intro.html) — the log-first / pages-later model and its rationale.
 - PostgreSQL documentation, [Reliability](https://www.postgresql.org/docs/current/wal-reliability.html) — full-page writes after a checkpoint, torn/partial page writes, and CRC-32C protection of WAL records, verified during crash recovery.
 - PostgreSQL documentation, [Write Ahead Log configuration](https://www.postgresql.org/docs/current/runtime-config-wal.html) — `wal_buffers`, `synchronous_commit` (including the bounded ≤ 3× `wal_writer_delay` loss window and the no-inconsistency guarantee), `wal_writer_delay`, `commit_delay`, `commit_siblings`, `full_page_writes`, `checkpoint_timeout`.
-- Martin Kleppmann, *Designing Data-Intensive Applications*, ch. 3 — write-ahead logs, durability, and the log-structured storage argument.
-- Alex Petrov, *Database Internals*, Part I — recovery, redo/undo, ARIES, and checkpointing.
+- Martin Kleppmann, _Designing Data-Intensive Applications_, ch. 3 — write-ahead logs, durability, and the log-structured storage argument.
+- Alex Petrov, _Database Internals_, Part I — recovery, redo/undo, ARIES, and checkpointing.

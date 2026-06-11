@@ -9,6 +9,7 @@ Legend: ✅ verified (source + confirming sentence) · ⚠️ simplification (mu
 prose — checked it IS) · ❌ wrong/unverifiable (fixed or cut).
 
 Primary sources used:
+
 - WAL intro: https://www.postgresql.org/docs/current/wal-intro.html
 - Reliability: https://www.postgresql.org/docs/current/wal-reliability.html
 - WAL config: https://www.postgresql.org/docs/current/runtime-config-wal.html
@@ -129,8 +130,8 @@ Primary sources used:
     flush of WAL to disk." (For single-node / empty synchronous_standby_names, on == local
     flush.) Verified for the single-node framing the prose uses.
 
-20. **synchronous_commit `off`: "the commit returns without waiting for that flush"; "is
-    *not* the fsync-nothing corruption case"; docs say it "does not create any risk of
+20. **synchronous*commit `off`: "the commit returns without waiting for that flush"; "is
+    \_not* the fsync-nothing corruption case"; docs say it "does not create any risk of
     database inconsistency"; "a crash can lose recently acknowledged transactions, but the
     database comes back consistent, as if those transactions had aborted cleanly."**
     ✅ runtime-config-wal: "Unlike fsync, setting this parameter to off does not create any

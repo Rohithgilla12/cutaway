@@ -105,9 +105,7 @@ describe("fsync-on durability", () => {
         for (let i = 0; i < crashAt; i++) applyOp(sim, ops[i]);
 
         const beforeCrash = sim.snapshot();
-        const ackedTxids = beforeCrash.txns
-          .filter((t) => t.status === "acked")
-          .map((t) => t.txid);
+        const ackedTxids = beforeCrash.txns.filter((t) => t.status === "acked").map((t) => t.txid);
 
         sim.crash();
         sim.recoverAll();
@@ -132,9 +130,7 @@ describe("fsync-off loss", () => {
     const acked = s1.txns.filter((t) => t.status === "acked");
     expect(acked.length).toBe(1);
     // Its commit record must still be buffered (not durable).
-    const commitRec = s1.records.find(
-      (r) => r.txid === acked[0].txid && r.kind === "commit",
-    );
+    const commitRec = s1.records.find((r) => r.txid === acked[0].txid && r.kind === "commit");
     expect(commitRec!.durability).toBe("buffered");
 
     sim.crash();
