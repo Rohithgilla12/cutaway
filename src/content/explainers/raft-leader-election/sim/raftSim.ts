@@ -151,7 +151,7 @@ function linkKey(a: number, b: number): string {
 }
 
 export function createRaftSim(seed: number): RaftSim {
-  const rng = mulberry32(seed);
+  let rng = mulberry32(seed);
 
   let now: number;
   let nodes: Node[];
@@ -178,6 +178,10 @@ export function createRaftSim(seed: number): RaftSim {
   }
 
   function init(): void {
+    // Re-seed the RNG so a reset sim reproduces the same trajectory as a fresh
+    // createRaftSim(seed) call — the advanced RNG state from a prior run must not
+    // carry over into the restarted simulation.
+    rng = mulberry32(seed);
     now = 0;
     messages = [];
     downLinks = new Set();
@@ -358,10 +362,7 @@ export function createRaftSim(seed: number): RaftSim {
       return;
     }
     // Valid current-term leader exists: recognize it and reset our timer.
-    if (n.role === "candidate") {
-      n.role = "follower";
-      n.votesGranted.clear();
-    }
+    if (n.role === "candidate") n.votesGranted.clear();
     n.role = "follower";
     n.electionElapsedMs = 0;
 
@@ -447,10 +448,8 @@ export function createRaftSim(seed: number): RaftSim {
         if (n.matchIndex[peer] >= idx) replicas += 1;
       }
       if (replicas >= QUORUM) {
-        if (idx > n.commitIndex) {
-          n.commitIndex = idx;
-          log(`n${n.id} commits up to index ${idx} (term ${n.currentTerm}, ${replicas}/${NODE_COUNT})`);
-        }
+        n.commitIndex = idx;
+        log(`n${n.id} commits up to index ${idx} (term ${n.currentTerm}, ${replicas}/${NODE_COUNT})`);
         break;
       }
     }
