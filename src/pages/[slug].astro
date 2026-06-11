@@ -21,7 +21,12 @@ const minutes = Math.max(
 );
 ---
 
-<Layout title={`${entry.data.title} — Cutaway`} description={entry.data.description} ogType="article">
+<Layout
+  title={`${entry.data.title} — Cutaway`}
+  description={entry.data.description}
+  ogType="article"
+  ogImagePath={`/og/${entry.id}.png`}
+>
   <article>
     <header class="mb-10">
       <PostMeta number={entry.data.number} pubDate={entry.data.pubDate} minutes={minutes} />

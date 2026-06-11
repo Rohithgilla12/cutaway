@@ -15,7 +15,7 @@ visualization → prose → verification → QA) is non-negotiable.
   usually has an instance running)
 - `pnpm check` — astro check, strict TS
 - `pnpm lint` / `pnpm format` — ESLint / Prettier
-- `pnpm og` — regenerate `public/og.png` from `assets/og.svg`
+- `pnpm og` — regenerate `public/og.png` (site-wide, from `assets/og.svg`) and `public/og/<slug>.png` per explainer (from frontmatter title/number). Run after adding or retitling an explainer.
 
 ## Platform rules
 
