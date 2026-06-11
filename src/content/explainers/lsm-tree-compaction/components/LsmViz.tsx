@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createLsmSim } from "../sim/lsmSim";
+import { createLsmSim, MEMTABLE_FLUSH_THRESHOLD } from "../sim/lsmSim";
 import type { LsmSim, LsmSnapshot } from "../sim/lsmSim";
-import { LevelDiagram } from "./LevelDiagram";
+import { LevelDiagram, MAX_L0_ROWS } from "./LevelDiagram";
 import { ReadPathPanel } from "./ReadPath";
 import { LsmControls } from "./LsmControls";
 import { useReducedMotion, useSimLoop, Legend, Stat, EventLog } from "../../../../lib/viz";
@@ -9,11 +9,12 @@ import { useReducedMotion, useSimLoop, Legend, Stat, EventLog } from "../../../.
 const SEED = 0x1a8b_3ee3;
 
 const LEGEND_ITEMS = [
-  { color: "var(--color-ok)", glyph: "✓", label: "value hit" },
-  { color: "var(--color-danger)", glyph: "✕", label: "tombstone hit" },
+  { color: "var(--color-ok)", glyph: "●", label: "value hit" },
+  { color: "var(--color-danger)", glyph: "◆", label: "tombstone hit" },
   { color: "var(--color-dead)", glyph: "✕", label: "miss" },
   { color: "var(--color-entity)", glyph: "▬", label: "memtable / L0" },
   { color: "var(--color-ok)", glyph: "▬", label: "L1" },
+  { color: "var(--color-danger)", glyph: "▪", label: "table holds tombstones" },
   { color: "var(--color-pending)", glyph: "▣", label: "compaction pressure" },
 ];
 
@@ -33,6 +34,9 @@ function simCaption(snap: LsmSnapshot): string {
 
 export default function LsmViz() {
   const simRef = useRef<LsmSim>(initialSim());
+  // Reading simRef.current in a useState lazy initializer trips react-hooks/refs;
+  // same two-instance pattern as WalViz (second sim only supplies the initial
+  // snapshot and is deterministically identical — same seed, same init).
   const [snap, setSnap] = useState<LsmSnapshot>(() => createLsmSim(SEED).snapshot());
   const [paused, setPaused] = useState(false);
   const [speed, setSpeed] = useState<0.5 | 1 | 2>(1);
@@ -175,13 +179,14 @@ export default function LsmViz() {
         }}
       >
         <span>
-          memtable {snap.memtable.length}/{8}
-          {memTableTombstones > 0 ? ` (${memTableTombstones} ✕)` : ""}
+          memtable {snap.memtable.length}/{MEMTABLE_FLUSH_THRESHOLD}
+          {memTableTombstones > 0 ? ` (${memTableTombstones} tombstones)` : ""}
         </span>
         <span>·</span>
         <span>
           L0: {snap.l0FileCount} files ({l0Entries} entries
           {l0Tombstones > 0 ? `, ${l0Tombstones} tombstones` : ""})
+          {snap.l0FileCount > MAX_L0_ROWS ? ` — drawing newest ${MAX_L0_ROWS}` : ""}
         </span>
         <span>·</span>
         <span>
@@ -229,18 +234,16 @@ export default function LsmViz() {
       </div>
 
       {/* Read path trace */}
-      <ReadPathPanel
-        path={snap.lastReadPath}
-        readAmplificationLast={snap.readAmplificationLast}
-        readAmplificationAvg={snap.readAmplificationAvg}
-      />
+      <ReadPathPanel path={snap.lastReadPath} />
 
       <div style={{ marginTop: 8 }}>
         <Legend items={LEGEND_ITEMS} />
       </div>
 
       <div style={{ marginTop: 8 }}>
-        <EventLog lines={recentLog} caption={caption} />
+        {/* caption="" keeps EventLog's internal aria-live region silent — the
+            island's single live region above announces all state changes */}
+        <EventLog lines={recentLog} caption="" />
       </div>
 
       <LsmControls

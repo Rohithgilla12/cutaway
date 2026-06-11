@@ -1,13 +1,12 @@
 import type { ReadPath as ReadPathData } from "../sim/lsmSim";
-import { Stat } from "../../../../lib/viz";
 
 interface Props {
   path: ReadPathData | null;
-  readAmplificationLast: number;
-  readAmplificationAvg: number;
 }
 
-export function ReadPathPanel({ path, readAmplificationLast, readAmplificationAvg }: Props) {
+// HTML trace of the last read's probe descent. The readAmp numbers themselves
+// live in the stats grid in LsmViz — this panel is only the per-probe trace.
+export function ReadPathPanel({ path }: Props) {
   return (
     <div
       style={{
@@ -20,28 +19,8 @@ export function ReadPathPanel({ path, readAmplificationLast, readAmplificationAv
         borderRadius: 3,
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          gap: "8px 24px",
-          flexWrap: "wrap",
-          marginBottom: path ? 6 : 0,
-        }}
-      >
-        <Stat
-          label="readAmp last"
-          value={readAmplificationLast === 0 ? "—" : readAmplificationLast}
-          danger={readAmplificationLast > 6}
-        />
-        <Stat
-          label="readAmp avg"
-          value={readAmplificationAvg === 0 ? "—" : readAmplificationAvg.toFixed(1)}
-          danger={readAmplificationAvg > 6}
-        />
-      </div>
-
       {path && (
-        <div style={{ marginTop: 4 }}>
+        <div>
           <span style={{ color: "var(--color-muted)", fontSize: 10 }}>read {path.key} → </span>
           <span
             style={{
@@ -51,6 +30,10 @@ export function ReadPathPanel({ path, readAmplificationLast, readAmplificationAv
             }}
           >
             {path.outcome === "value" ? `${path.key}=${path.value}` : "not found"}
+          </span>
+          <span style={{ color: "var(--color-muted)", fontSize: 10 }}>
+            {" "}
+            · {path.readAmplification} probe{path.readAmplification === 1 ? "" : "s"}
           </span>
           <div
             style={{
@@ -84,9 +67,7 @@ export function ReadPathPanel({ path, readAmplificationLast, readAmplificationAv
         </div>
       )}
 
-      {!path && (
-        <div style={{ color: "var(--color-muted)", fontSize: 10, marginTop: 2 }}>press Read to trace a path</div>
-      )}
+      {!path && <div style={{ color: "var(--color-muted)", fontSize: 10 }}>press Read to trace a path</div>}
     </div>
   );
 }
