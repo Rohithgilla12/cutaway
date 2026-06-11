@@ -10,7 +10,8 @@
     "check": "astro check",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "og": "node scripts/generate-og.mjs"
+    "og": "node scripts/generate-og.mjs",
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@astrojs/mdx": "^6.0.3",
@@ -41,6 +42,7 @@
     "prettier-plugin-tailwindcss": "^0.8.0",
     "sharp": "^0.35.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.61.0"
+    "typescript-eslint": "^8.61.0",
+    "vitest": "^4.1.8"
   }
 }
