@@ -129,15 +129,7 @@ function NodeCircle({ node, onNodeClick, focused, onFocus, onBlur }: NodeCircleP
     >
       {node.role !== "dead" && node.role !== "leader" && <TimerArc cx={nx} cy={ny} r={NODE_R} pct={node.timerPct} />}
       {focused && (
-        <circle
-          cx={nx}
-          cy={ny}
-          r={NODE_R + 6}
-          fill="none"
-          stroke="var(--color-entity)"
-          strokeWidth={3}
-          opacity={0.8}
-        />
+        <circle cx={nx} cy={ny} r={NODE_R + 6} fill="none" stroke="var(--color-entity)" strokeWidth={3} opacity={0.8} />
       )}
       <circle cx={nx} cy={ny} r={43} fill="transparent" stroke="none" />
       <circle
@@ -201,17 +193,7 @@ function LinkLine({ link, onLinkClick, focused, onFocus, onBlur }: LinkLineProps
       role="button"
       aria-label={`link n${link.a}–n${link.b} — ${action}`}
     >
-      {focused && (
-        <line
-          x1={ax}
-          y1={ay}
-          x2={bx}
-          y2={by}
-          stroke="var(--color-entity)"
-          strokeWidth={5}
-          opacity={0.6}
-        />
-      )}
+      {focused && <line x1={ax} y1={ay} x2={bx} y2={by} stroke="var(--color-entity)" strokeWidth={5} opacity={0.6} />}
       <line x1={ax} y1={ay} x2={bx} y2={by} stroke="transparent" strokeWidth={84} />
       <line
         x1={ax}

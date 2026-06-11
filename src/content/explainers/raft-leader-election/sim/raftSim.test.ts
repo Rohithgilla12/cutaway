@@ -408,10 +408,9 @@ describe("Commit Safety: deterministic partition schedule", () => {
     snap = sim.snapshot();
     const staleLeaderMid = snap.nodes.find((n) => n.id === oldLeaderId)!;
     // Stale leader must not have advanced its commit index beyond the pre-partition value.
-    expect(
-      staleLeaderMid.commitIndex,
-      "Phase 3: stale leader must not commit while in minority",
-    ).toBeLessThanOrEqual(prePartitionCommitIndex);
+    expect(staleLeaderMid.commitIndex, "Phase 3: stale leader must not commit while in minority").toBeLessThanOrEqual(
+      prePartitionCommitIndex,
+    );
 
     // Record the stale leader's log length — these extra entries must be overwritten.
     const staleLogLengthMid = staleLeaderMid.log.length;
@@ -451,10 +450,9 @@ describe("Commit Safety: deterministic partition schedule", () => {
         const na = alive[a];
         const nb = alive[b];
         for (let i = 0; i < minCommit; i++) {
-          expect(
-            na.log[i],
-            `Committed entry at index ${i + 1} differs between n${na.id} and n${nb.id}`,
-          ).toEqual(nb.log[i]);
+          expect(na.log[i], `Committed entry at index ${i + 1} differs between n${na.id} and n${nb.id}`).toEqual(
+            nb.log[i],
+          );
         }
       }
     }
@@ -602,10 +600,9 @@ describe("Determinism", () => {
     for (let k = 0; k < steps; k++) {
       a.step(120);
       b.step(120);
-      expect(
-        JSON.stringify(a.snapshot()),
-        `reset sim diverged from fresh sim at step ${k + 1}`,
-      ).toBe(JSON.stringify(b.snapshot()));
+      expect(JSON.stringify(a.snapshot()), `reset sim diverged from fresh sim at step ${k + 1}`).toBe(
+        JSON.stringify(b.snapshot()),
+      );
     }
 
     // Wait for a leader to emerge, then drive a clientWrite through a full settle.
@@ -629,10 +626,9 @@ describe("Determinism", () => {
     for (let k = 0; k < 20; k++) {
       a.step(120);
       b.step(120);
-      expect(
-        JSON.stringify(a.snapshot()),
-        `reset sim diverged from fresh sim at settle step ${k + 1}`,
-      ).toBe(JSON.stringify(b.snapshot()));
+      expect(JSON.stringify(a.snapshot()), `reset sim diverged from fresh sim at settle step ${k + 1}`).toBe(
+        JSON.stringify(b.snapshot()),
+      );
     }
   });
 });

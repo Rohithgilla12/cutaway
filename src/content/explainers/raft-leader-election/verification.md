@@ -9,6 +9,7 @@ Legend: ✅ verified (source + confirming sentence) · ⚠️ simplification (mu
 prose — checked it IS) · ❌ wrong/unverifiable (fixed or cut).
 
 Primary sources used:
+
 - Raft extended paper (pages 5–9 = §§5.1–5.4.3): https://raft.github.io/raft.pdf
 - etcd tuning: https://etcd.io/docs/v3.5/tuning/
 - Consul consensus: https://developer.hashicorp.com/consul/docs/architecture/consensus
@@ -64,7 +65,7 @@ results are quoted under section H.
 7. **"Each node grants at most one vote per term."**
    ✅ §5.2: "Each server will vote for at most one candidate in a given term, on a
    first-come-first-served basis." Matches sim `handleRequestVote` (`votedFor === null ||
-   votedFor === candidate`).
+votedFor === candidate`).
 
 8. **"that grant is persisted before the reply is sent."**
    ⚠️ §5 (Figure 2) lists `votedFor` as persistent state updated on stable storage before
@@ -227,7 +228,7 @@ results are quoted under section H.
     replicas; once an entry from the current term has been committed in this way, then all
     prior entries are committed indirectly because of the Log Matching Property." Section
     §5.4.2 confirmed. Matches sim `maybeAdvanceCommit` (`if (termAt(n, idx) !== n.currentTerm)
-    continue;`).
+continue;`).
 
 32. **"The reason is Figure 8 of the paper: a leader that committed a prior-term entry by
     replica count could later see that same entry overwritten by a different leader, which

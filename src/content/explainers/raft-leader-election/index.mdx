@@ -8,6 +8,7 @@ draft: false
 
 import Figure from "../../../components/Figure.astro";
 import RaftViz from "./components/RaftViz";
+import QuorumViz from "./components/QuorumViz";
 
 A switch between two racks starts dropping packets. Your primary is on one side, two of its five replicas on the other. The primary never notices it is cut off — from its own view, three peers went quiet, which looks exactly like three peers being slow. It keeps accepting writes. On the other side of the break, the replicas decide the primary is dead and promote one of their own. Now two nodes are taking writes under the same name, and the only thing standing between you and silent divergence is whatever rule decides which writes are real.
 
@@ -45,6 +46,12 @@ Election is driven by timeouts, and the timeouts are randomized on purpose. Each
 
 The vote is where safety actually lives. **Each node grants at most one vote per term, and that grant is persisted before the reply is sent.** Combined with the requirement that a candidate must collect a strict majority — three of five — this is the whole guarantee. Any two majorities of a five-node cluster share at least one node, and that shared node will not vote for two different candidates in the same term. So two candidates cannot both reach three votes in term N. At most one leader per term, under any sequence of partitions and timeouts you can throw at it. That is the invariant the simulation is built to preserve, and it is the one you should try hardest to break.
 
+Try it yourself below: pick any two groups of three nodes and the overlap is always non-empty. That overlap is the physical impossibility of two simultaneous leaders.
+
+<Figure number={2} label="quorum overlap" caption="Coach: try to pick two majorities that don't overlap.">
+  <QuorumViz client:visible />
+</Figure>
+
 > The sim persists `term`, `votedFor`, and the `log` across a node restart (click Restart on a dead node), and resets only volatile state, matching Raft's split of persistent versus volatile state in §5. A real deployment fsyncs those three fields before replying to a vote; the sim updates them synchronously and skips modeling the disk write.
 
 Three experiments make the mechanism concrete.
@@ -55,7 +62,7 @@ Three experiments make the mechanism concrete.
 
 **Write to the stale leader and watch the commit index freeze.** While the leader is isolated, press **Client write** a few times. The entries append to the stale leader's log — its `log` count climbs in the node panel — but its `commit` counter does not move. A write commits only when the leader replicates it to a majority, and the isolated leader can reach exactly one node: itself. Those entries are accepted, durable nowhere, acknowledged to no client. Now press **Heal all**. The stale leader receives a heartbeat stamped with term N+1, sees a term higher than its own, and steps down to follower on the spot. Its uncommitted entries — the ones whose commit index never advanced — are overwritten by the real leader's log. No acknowledged write is lost, because none of those writes was ever acknowledged as committed.
 
-That is the answer to the opening outage. The partitioned primary can keep *accepting* writes all day; what it cannot do is *commit* them, because commit requires a majority and the majority is on the other side of the break.
+That is the answer to the opening outage. The partitioned primary can keep _accepting_ writes all day; what it cannot do is _commit_ them, because commit requires a majority and the majority is on the other side of the break.
 
 ## Failure modes
 
@@ -75,7 +82,7 @@ etcd defaults the **heartbeat interval to 100 ms** and the **election timeout to
 
 > The sim sends the entire log suffix after `prevLogIndex` in each AppendEntries, and a follower that rejects backs the leader off one index per round. Real implementations batch and cap entries per RPC and use the conflict-term optimization from §5.3 to skip whole terms at once. The convergence is identical; the sim is slower and simpler about getting there.
 
-One commit rule is too sharp to skip and too deep to expand here. A leader replicates entries left over from previous terms, but it is not allowed to consider such an entry committed merely because a majority now stores it. It may only count replicas for entries from its *own* current term, and prior-term entries commit indirectly, carried along once a current-term entry above them commits (§5.4.2). The reason is Figure 8 of the paper: a leader that committed a prior-term entry by replica count could later see that same entry overwritten by a different leader, which would mean committing and then losing the same entry. The sim enforces this — `maybeAdvanceCommit` only advances on a current-term entry — and the full walk-through of Figure 8 lives in this explainer's parking-lot notes rather than here, because it is a log-replication subtlety, not an election one.
+One commit rule is too sharp to skip and too deep to expand here. A leader replicates entries left over from previous terms, but it is not allowed to consider such an entry committed merely because a majority now stores it. It may only count replicas for entries from its _own_ current term, and prior-term entries commit indirectly, carried along once a current-term entry above them commits (§5.4.2). The reason is Figure 8 of the paper: a leader that committed a prior-term entry by replica count could later see that same entry overwritten by a different leader, which would mean committing and then losing the same entry. The sim enforces this — `maybeAdvanceCommit` only advances on a current-term entry — and the full walk-through of Figure 8 lives in this explainer's parking-lot notes rather than here, because it is a log-replication subtlety, not an election one.
 
 ## When Raft is worth it
 
