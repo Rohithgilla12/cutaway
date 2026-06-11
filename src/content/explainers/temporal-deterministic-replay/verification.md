@@ -328,3 +328,13 @@ history-edge clean replay, spam/abuse safety) are covered by replaySim.test.ts. 
 edge-state QA (360px, reduced-motion stepped mode, tab-backgrounding, button spam) should be
 run before flipping `draft: false`. The human must review and approve this checklist before
 publishing (PRD definition of done).
+
+## Edge-state QA (2026-06-11)
+
+Exercised in a real browser (built site, Playwright): full mismatch experiment verified — crash after chargeCard
+recorded, replay with injection emitted StartTimer vs expected ActivityTaskScheduled(reserveInventory), exact error
+naming both sides + eventId, ✓/✕ comparison strip, activities-executed flat at 2; history-edge experiment verified —
+early crash + injection replayed cleanly and fired the explanatory annotation; amount = 98 renders as prose pins
+(protected by the cross-sim reset re-seed fix, commit ee1bd76); 360px clean after stacking the code/comparison
+columns (repeat(auto-fit, minmax(280px,1fr))); zero console errors/warnings. One ergonomic note: at 1× the live crash
+window is ~6s — comfortable for a watching human, and Pause is always available to freeze it.

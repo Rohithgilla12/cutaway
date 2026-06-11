@@ -189,7 +189,7 @@ export default function ReplayViz() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)",
+          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
           gap: 12,
           marginTop: 12,
         }}
