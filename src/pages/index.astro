@@ -8,12 +8,20 @@ const entries = (await getCollection("explainers", ({ data }) => import.meta.env
 );
 
 const minutesFor = (body: string | undefined) =>
-  Math.max(1, Math.round((body ?? "").replace(/^import\s.+$|<[^>]+>/gm, " ").split(/\s+/).filter(Boolean).length / 200));
+  Math.max(
+    1,
+    Math.round(
+      (body ?? "")
+        .replace(/^import\s.+$|<[^>]+>/gm, " ")
+        .split(/\s+/)
+        .filter(Boolean).length / 200,
+    ),
+  );
 ---
 
 <Layout title="Cutaway" description="Interactive explainers of backend and systems internals — the casing removed.">
   <h1 class="sr-only">Cutaway — interactive explainers of systems internals</h1>
-  <p class="prose mb-12 text-muted">
+  <p class="prose text-muted mb-12">
     Interactive explainers of backend and systems internals — WALs, Raft, connection pooling, workflow engines — with
     the casing removed. Built for engineers who have been paged at 3 AM.
   </p>
@@ -27,10 +35,10 @@ const minutesFor = (body: string | undefined) =>
               {entry.data.title}
             </a>
           </h2>
-          <p class="mt-1 max-w-prose text-muted">{entry.data.description}</p>
+          <p class="text-muted mt-1 max-w-prose">{entry.data.description}</p>
         </li>
       ))
     }
-    {entries.length === 0 && <li class="font-mono text-sm text-muted">No explainers published yet. Soon.</li>}
+    {entries.length === 0 && <li class="text-muted font-mono text-sm">No explainers published yet. Soon.</li>}
   </ul>
 </Layout>

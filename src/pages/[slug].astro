@@ -10,7 +10,15 @@ export async function getStaticPaths() {
 
 const { entry } = Astro.props;
 const { Content } = await render(entry);
-const minutes = Math.max(1, Math.round((entry.body ?? "").replace(/^import\s.+$|<[^>]+>/gm, " ").split(/\s+/).filter(Boolean).length / 200));
+const minutes = Math.max(
+  1,
+  Math.round(
+    (entry.body ?? "")
+      .replace(/^import\s.+$|<[^>]+>/gm, " ")
+      .split(/\s+/)
+      .filter(Boolean).length / 200,
+  ),
+);
 ---
 
 <Layout title={`${entry.data.title} — Cutaway`} description={entry.data.description} ogType="article">
@@ -18,7 +26,7 @@ const minutes = Math.max(1, Math.round((entry.body ?? "").replace(/^import\s.+$|
     <header class="mb-10">
       <PostMeta number={entry.data.number} pubDate={entry.data.pubDate} minutes={minutes} />
       <h1 class="mt-2 text-2xl font-semibold text-balance">{entry.data.title}</h1>
-      {entry.data.draft && <p class="mt-2 font-mono text-xs text-pending uppercase">draft — dev only</p>}
+      {entry.data.draft && <p class="text-pending mt-2 font-mono text-xs uppercase">draft — dev only</p>}
     </header>
     <div class="prose">
       <Content />
