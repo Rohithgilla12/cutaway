@@ -28,7 +28,9 @@
     "tailwindcss": "^4.3.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["sharp"]
+    "onlyBuiltDependencies": [
+      "sharp"
+    ]
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
