@@ -294,3 +294,12 @@ replay). Sim invariants (determinism, spam-safety hammering 2000 ops, auto-mode 
 L1 disjointness, no-data-loss) are covered by lsmSim.test.ts (24 tests passing). Browser
 edge-state QA (360px, reduced-motion stepped mode, tab-backgrounding) should be run before
 flipping `draft: false`.
+
+## Edge-state QA (2026-06-11)
+
+Exercised in a real browser (built site, Playwright): auto-write + auto-flush with auto-compact off piled L0 to 28+
+files with the pressure badge, primary Compact button, climbing read traces (4-probe trace with tombstone hit
+rendered correctly), spaceAmp 8.0 and tombstone counter in danger red; Compact merged 66 L0 + 0 L1 → 4 L1 files
+(7 tombstones, 496 obsolete versions dropped per event log) and L0 began refilling under continued load — the
+pay-later treadmill visible; 360px layout clean (L0 draw cap at 12 rows with honest counts, controls wrap); zero
+console errors/warnings. Stepped reduced-motion mode and spam safety covered by code review + 24 sim invariant tests.
