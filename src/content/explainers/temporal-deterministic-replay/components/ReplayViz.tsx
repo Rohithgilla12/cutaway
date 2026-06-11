@@ -50,11 +50,11 @@ function liveCaption(snap: ReplaySnapshot): string {
 
 const LEGEND_ITEMS = [
   { color: "var(--color-muted)", glyph: "▪", label: "workflow-task event" },
-  { color: "var(--color-entity, #3b82f6)", glyph: "▪", label: "activity event" },
-  { color: "var(--color-pending, #f59e0b)", glyph: "▪", label: "timer event" },
-  { color: "var(--color-ok, #22c55e)", glyph: "▪", label: "completion" },
+  { color: "var(--color-entity)", glyph: "▪", label: "activity event" },
+  { color: "var(--color-pending)", glyph: "▪", label: "timer event" },
+  { color: "var(--color-ok)", glyph: "▪", label: "completion" },
   { color: "var(--color-ink)", glyph: "▸", label: "replay cursor" },
-  { color: "var(--color-danger, #ef4444)", glyph: "✕", label: "mismatch" },
+  { color: "var(--color-danger)", glyph: "✕", label: "mismatch" },
 ];
 
 export default function ReplayViz() {
@@ -256,7 +256,7 @@ export default function ReplayViz() {
           style={{
             marginTop: 8,
             padding: "8px 10px",
-            border: "1px solid var(--color-pending, #f59e0b)",
+            border: "1px solid var(--color-pending)",
             borderRadius: 3,
             background: "rgba(245,158,11,0.06)",
             color: "var(--color-ink)",
