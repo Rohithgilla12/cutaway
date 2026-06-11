@@ -35,8 +35,16 @@ function serverFill(state: string): string {
   }
 }
 
+function clientSpacing(total: number): number {
+  return Math.min(22, (VIEW_H - 40) / Math.max(total, 1));
+}
+
+function clientH(total: number): number {
+  return Math.max(12, Math.min(CLIENT_H, clientSpacing(total) - 3));
+}
+
 function clientY(idx: number, total: number): number {
-  const spacing = Math.min(22, (VIEW_H - 40) / Math.max(total, 1));
+  const spacing = clientSpacing(total);
   const totalH = spacing * (total - 1);
   const startY = (VIEW_H - totalH) / 2;
   return startY + idx * spacing;
@@ -62,8 +70,11 @@ export function LaneDiagram({ snap }: Props) {
 
   const serverCenters: [number, number][] = servers.map((_, i) => [SERVER_COL_X, serverY(i, serverCount)]);
 
+  const h = clientH(clientCount);
+
   return (
     <svg
+      role="img"
       viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
       width="100%"
       aria-label="Pool lane diagram — clients left column, servers right column, animated query pulses along connection lanes"
@@ -114,9 +125,9 @@ export function LaneDiagram({ snap }: Props) {
           <rect
             key={`c-${c.id}`}
             x={cx - CLIENT_W / 2}
-            y={cy - CLIENT_H / 2}
+            y={cy - h / 2}
             width={CLIENT_W}
-            height={CLIENT_H}
+            height={h}
             rx={3}
             fill={fill}
             opacity={c.state === "idle" ? 0.45 : 1}

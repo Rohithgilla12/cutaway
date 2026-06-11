@@ -116,7 +116,7 @@ interface PlayPauseOrStepProps {
 export function PlayPauseOrStep({ paused, reducedMotion, onTogglePause, onStep }: PlayPauseOrStepProps) {
   if (reducedMotion) {
     return (
-      <button style={BTN_BASE} onClick={onStep} title="Advance simulation by 100ms">
+      <button style={BTN_BASE} onClick={onStep} title="Advance simulation by 100ms" aria-label="Step simulation forward 100ms">
         Step
       </button>
     );

@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPoolSim, MAX_CLIENTS, MAX_POOL_SIZE, MIN_CLIENTS, MIN_POOL_SIZE } from "../sim/poolSim";
 import type { PoolMode, PoolSim, PoolSnapshot } from "../sim/poolSim";
 import { LaneDiagram } from "./LaneDiagram";
 import {
+  BTN_BASE,
   EventLog,
   Legend,
   PlayPauseOrStep,
@@ -65,6 +66,8 @@ interface StepperProps {
 function Stepper({ label, value, min, max, onDecrement, onIncrement }: StepperProps) {
   return (
     <div
+      role="group"
+      aria-label={label}
       style={{
         display: "flex",
         alignItems: "center",
@@ -111,9 +114,14 @@ function Stepper({ label, value, min, max, onDecrement, onIncrement }: StepperPr
 
 export default function PoolViz() {
   const simRef = useRef<PoolSim>(makeSim());
+  // Two-instance pattern: simRef drives the live simulation; the initial snapshot
+  // for useState is taken from a separate instance with the same seed so the hook
+  // call is synchronous without a ref read during render.
   const [snap, setSnap] = useState<PoolSnapshot>(() => createPoolSim(SEED).snapshot());
   const [paused, setPaused] = useState(false);
   const [speed, setSpeed] = useState<0.5 | 1 | 2>(1);
+  const [announcement, setAnnouncement] = useState("");
+  const prevErrPreparedRef = useRef(0);
   const reducedMotion = useReducedMotion();
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -127,8 +135,17 @@ export default function PoolViz() {
 
   useSimLoop({ step: stepSim, onFrame: takeSnap, speed, paused, reducedMotion, rootRef });
 
+  useEffect(() => {
+    const cur = snap.counters.errors.prepared_missing;
+    if (cur > 0 && prevErrPreparedRef.current === 0) {
+      setAnnouncement("first prepared-statement error — see event log");
+    }
+    prevErrPreparedRef.current = cur;
+  }, [snap.counters.errors.prepared_missing]);
+
   const handleMode = useCallback(
     (m: PoolMode) => {
+      setAnnouncement(`pool mode: ${m}`);
       simRef.current.setMode(m);
       takeSnap();
     },
@@ -137,31 +154,40 @@ export default function PoolViz() {
 
   const handleClients = useCallback(
     (delta: number) => {
-      simRef.current.setClients(snap.clientCount + delta);
+      simRef.current.setClients(simRef.current.snapshot().clientCount + delta);
       takeSnap();
     },
-    [snap.clientCount, takeSnap],
+    [takeSnap],
   );
 
   const handlePoolSize = useCallback(
     (delta: number) => {
-      simRef.current.setPoolSize(snap.poolSize + delta);
+      simRef.current.setPoolSize(simRef.current.snapshot().poolSize + delta);
       takeSnap();
     },
-    [snap.poolSize, takeSnap],
+    [takeSnap],
   );
 
   const handleLoad = useCallback(() => {
-    simRef.current.setLoad(snap.load === "low" ? "high" : "low");
+    const nextLoad = simRef.current.snapshot().load === "low" ? "high" : "low";
+    setAnnouncement(`load: ${nextLoad}`);
+    simRef.current.setLoad(nextLoad);
     takeSnap();
-  }, [snap.load, takeSnap]);
+  }, [takeSnap]);
 
   const handlePrepared = useCallback(() => {
-    simRef.current.togglePrepared(!snap.preparedOn);
+    const nextOn = !simRef.current.snapshot().preparedOn;
+    setAnnouncement(`prepared statements: ${nextOn ? "on" : "off"}`);
+    simRef.current.togglePrepared(nextOn);
     takeSnap();
-  }, [snap.preparedOn, takeSnap]);
+  }, [takeSnap]);
 
-  const handleTogglePause = useCallback(() => setPaused((p) => !p), []);
+  const handleTogglePause = useCallback(() => {
+    setPaused((p) => {
+      setAnnouncement(p ? "playing" : "paused");
+      return !p;
+    });
+  }, []);
 
   const handleStep = useCallback(() => {
     simRef.current.step(100);
@@ -169,6 +195,7 @@ export default function PoolViz() {
   }, [takeSnap]);
 
   const handleReset = useCallback(() => {
+    setAnnouncement("simulation reset");
     simRef.current.reset();
     setPaused(false);
     takeSnap();
@@ -181,12 +208,10 @@ export default function PoolViz() {
   const { counters, servers, waitQueue, eventLog } = snap;
   const recentLog = eventLog.slice(-10);
 
-  const modeCaption = `Pool mode: ${snap.mode}. Wait queue depth: ${waitQueue.length}. Transactions completed: ${counters.xactsCompleted}.`;
-
   return (
     <div ref={rootRef} style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
       <div aria-live="polite" className="sr-only">
-        {modeCaption}
+        {announcement}
       </div>
 
       {/* Mode indicator strip */}
@@ -204,15 +229,32 @@ export default function PoolViz() {
         }}
       >
         <span style={{ color: "var(--color-muted)", fontSize: 10 }}>MODE</span>
-        {(["session", "transaction", "statement"] as PoolMode[]).map((m) => (
-          <VizToggle key={m} pressed={snap.mode === m} label={MODE_LABELS[m]} onClick={() => handleMode(m)} />
-        ))}
+        <div role="radiogroup" aria-label="Pool mode" style={{ display: "flex", gap: 8 }}>
+          {(["session", "transaction", "statement"] as PoolMode[]).map((m) => (
+            <button
+              key={m}
+              role="radio"
+              aria-checked={snap.mode === m}
+              onClick={() => handleMode(m)}
+              style={{
+                ...BTN_BASE,
+                background: snap.mode === m ? "var(--color-ink)" : "var(--color-raised)",
+                color: snap.mode === m ? "var(--color-raised)" : "var(--color-ink)",
+              }}
+            >
+              {MODE_LABELS[m]}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Lane diagram */}
       <LaneDiagram snap={snap} />
 
       {/* Per-server prepared chips — HTML, below SVG */}
+      <p style={{ fontSize: 9, color: "var(--color-muted)", margin: "6px 0 2px", fontFamily: "var(--font-mono)" }}>
+        prepared statements resident per server:
+      </p>
       <div
         style={{
           marginTop: 4,
@@ -372,7 +414,7 @@ export default function PoolViz() {
       )}
 
       <div style={{ marginTop: 6 }}>
-        <EventLog lines={recentLog} caption={modeCaption} />
+        <EventLog lines={recentLog} />
       </div>
     </div>
   );
