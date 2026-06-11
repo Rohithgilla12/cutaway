@@ -55,7 +55,7 @@ export function ComparisonStrip({ comparison, status, nondeterminismError }: Com
               gap: "0 8px",
               padding: "3px 0",
               borderTop: "1px solid var(--color-rule)",
-              background: isMismatch ? "rgba(239,68,68,0.06)" : "transparent",
+              background: isMismatch ? "color-mix(in srgb, var(--color-danger) 8%, transparent)" : "transparent",
             }}
           >
             <span
@@ -95,13 +95,13 @@ export function ComparisonStrip({ comparison, status, nondeterminismError }: Com
 
       {failed && nondeterminismError && (
         <div
-          role="alert"
+          aria-hidden="true"
           style={{
             marginTop: 8,
             padding: "8px 10px",
             border: "2px solid var(--color-danger)",
             borderRadius: 3,
-            background: "rgba(239,68,68,0.06)",
+            background: "color-mix(in srgb, var(--color-danger) 8%, transparent)",
             color: "var(--color-danger)",
             fontSize: 11,
             lineHeight: 1.5,

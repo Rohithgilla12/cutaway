@@ -65,7 +65,7 @@ export function WorkflowCode({ code, status }: WorkflowCodeProps) {
               key={lineNum}
               style={{
                 display: "flex",
-                background: isActive ? "rgba(59,130,246,0.12)" : "transparent",
+                background: isActive ? "color-mix(in srgb, var(--color-entity) 12%, transparent)" : "transparent",
                 borderLeft: isActive ? "2px solid var(--color-entity)" : "2px solid transparent",
                 padding: "1px 8px 1px 6px",
               }}

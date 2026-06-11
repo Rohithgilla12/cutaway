@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import { createReplaySim } from "../sim/replaySim";
 import type { ReplaySim, ReplaySnapshot } from "../sim/replaySim";
 import { HistoryTape } from "./HistoryTape";
@@ -69,6 +69,9 @@ export default function ReplayViz() {
     setSnap(simRef.current.snapshot());
   }, []);
 
+  const isTerminal = snap.status === "completed" || snap.status === "failed-nondeterminism";
+  const effectivePaused = useMemo(() => paused || isTerminal, [paused, isTerminal]);
+
   const takeSnap = useCallback(() => {
     setSnap(simRef.current.snapshot());
   }, []);
@@ -81,7 +84,7 @@ export default function ReplayViz() {
     step: stepSim,
     onFrame: takeSnap,
     speed,
-    paused,
+    paused: effectivePaused,
     reducedMotion,
     rootRef,
   });
@@ -105,8 +108,10 @@ export default function ReplayViz() {
 
   const handleReplayAll = useCallback(() => {
     simRef.current.replayAll();
-    takeSnap();
-  }, [takeSnap]);
+    const s = simRef.current.snapshot();
+    if (s.status === "running") setPaused(false);
+    setSnap(s);
+  }, []);
 
   const handleToggleNondeterminism = useCallback(() => {
     simRef.current.setNondeterminism(!snap.nondeterminism);
@@ -147,7 +152,10 @@ export default function ReplayViz() {
   const canReplayAll = isCrashed || isReplaying;
 
   const historyEdgeAnnotation =
-    nondeterminism && isCompleted && snap.comparison.every((r) => r.outcome === "match" || r.outcome === "pending");
+    nondeterminism &&
+    isCompleted &&
+    snap.comparison.length > 0 &&
+    snap.comparison.every((r) => r.outcome === "match" || r.outcome === "pending");
 
   const recentLog = eventLog.slice(-5);
   const caption = liveCaption(snap);
@@ -229,7 +237,7 @@ export default function ReplayViz() {
         }}
       >
         <Stat label="events" value={events.length} />
-        <Stat label="activityExecCount" value={activityExecCount} />
+        <Stat label="activities executed" value={activityExecCount} />
         <Stat label="status" value={statusLabel(status)} danger={isFailed || isCrashed} />
       </div>
 
@@ -241,7 +249,7 @@ export default function ReplayViz() {
             padding: "8px 10px",
             border: "2px solid var(--color-danger)",
             borderRadius: 3,
-            background: "rgba(239,68,68,0.06)",
+            background: "color-mix(in srgb, var(--color-danger) 8%, transparent)",
             color: "var(--color-danger)",
             fontSize: 11,
             lineHeight: 1.5,
@@ -258,14 +266,15 @@ export default function ReplayViz() {
             padding: "8px 10px",
             border: "1px solid var(--color-pending)",
             borderRadius: 3,
-            background: "rgba(245,158,11,0.06)",
+            background: "color-mix(in srgb, var(--color-pending) 8%, transparent)",
             color: "var(--color-ink)",
             fontSize: 11,
             lineHeight: 1.6,
           }}
         >
           <strong>replay completed</strong> — the divergence fell past the history edge: nothing was recorded yet to
-          contradict it. Crash later (after the first activity completes) to see detection fire.
+          contradict it. Crash while the first activity is in flight or later — its completion and the next command are
+          recorded server-side when you crash — to see detection fire.
         </div>
       )}
 
@@ -336,7 +345,7 @@ export default function ReplayViz() {
           }}
         >
           <PlayPauseOrStep
-            paused={paused}
+            paused={effectivePaused}
             reducedMotion={reducedMotion}
             onTogglePause={handleTogglePause}
             onStep={handleStep}
