@@ -15,3 +15,12 @@ dist/
 # os
 .DS_Store
 .playwright-mcp/
+
+# cloudflare/wrangler local state and secrets
+.wrangler/
+.dev.vars
+.dev.vars.*
+
+# local tool state
+.claude/settings.local.json
+*.log
