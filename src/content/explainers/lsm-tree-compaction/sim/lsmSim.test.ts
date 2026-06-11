@@ -420,6 +420,38 @@ describe("determinism", () => {
     expect(JSON.stringify(a.snapshot())).toBe(fresh);
   });
 
+  it("reset re-seeds RNG: post-reset trajectory matches a fresh same-seed sim step-for-step", () => {
+    // Exercise the sim heavily (consume RNG state), then reset. The reset sim must
+    // reproduce the exact same sequence of RNG-driven outcomes (random keys, values)
+    // as a freshly constructed same-seed sim when both are driven through identical ops.
+    const SEED = 61;
+    const exerciseOps = makeSchedule(SEED, 50);
+    const postResetOps = makeSchedule(SEED * 3 + 1, 30);
+
+    // Build up and then reset a sim.
+    const resetSim = createLsmSim(SEED);
+    const resetOracle = new Oracle();
+    for (const op of exerciseOps) applyOp(resetSim, resetOracle, op);
+    resetSim.flush();
+    resetSim.compact();
+    resetSim.reset();
+
+    // Fresh sim with the same seed.
+    const freshSim = createLsmSim(SEED);
+
+    // Both must start from the same state.
+    expect(JSON.stringify(resetSim.snapshot())).toBe(JSON.stringify(freshSim.snapshot()));
+
+    // Drive both through an identical post-reset sequence and assert JSON-equal at every step.
+    const freshOracle = new Oracle();
+    const resetOracle2 = new Oracle();
+    for (const op of postResetOps) {
+      applyOp(resetSim, resetOracle2, op);
+      applyOp(freshSim, freshOracle, op);
+      expect(JSON.stringify(resetSim.snapshot())).toBe(JSON.stringify(freshSim.snapshot()));
+    }
+  });
+
   it("auto-write produces identical streams for the same seed", () => {
     const a = createLsmSim(31);
     const b = createLsmSim(31);

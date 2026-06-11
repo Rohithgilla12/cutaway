@@ -407,6 +407,31 @@ describe("8. determinism + spam safety", () => {
     expect(JSON.stringify(a.snapshot())).toBe(fresh);
   });
 
+  it("reset re-seeds RNG: post-reset trajectory matches a fresh same-seed sim step-for-step", () => {
+    // Exercise the sim heavily (consume RNG state), then reset. The reset sim must
+    // reproduce the exact same sequence of RNG-driven outcomes as a freshly constructed
+    // same-seed sim when both are driven through identical ops.
+    const SEED = 53;
+    const exerciseOps = randomOps(SEED, 60);
+    const postResetOps = randomOps(SEED * 3 + 1, 30);
+
+    // Build up and then reset a sim.
+    const resetSim = createPoolSim(SEED);
+    for (const op of exerciseOps) applyOp(resetSim, op);
+    resetSim.reset();
+
+    // Fresh sim with the same seed.
+    const freshSim = createPoolSim(SEED);
+
+    // Both must produce identical snapshots at every point in the post-reset sequence.
+    expect(JSON.stringify(resetSim.snapshot())).toBe(JSON.stringify(freshSim.snapshot()));
+    for (const op of postResetOps) {
+      applyOp(resetSim, op);
+      applyOp(freshSim, op);
+      expect(JSON.stringify(resetSim.snapshot())).toBe(JSON.stringify(freshSim.snapshot()));
+    }
+  });
+
   it("spamming every method in every reachable state never throws or corrupts", () => {
     const sim = createPoolSim(55);
     const spam = (): void => {

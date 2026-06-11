@@ -158,7 +158,7 @@ function rangesOverlap(aMin: string, aMax: string, bMin: string, bMax: string): 
 }
 
 export function createLsmSim(seed: number): LsmSim {
-  const rng = mulberry32(seed);
+  let rng = mulberry32(seed);
 
   let memtable: Map<string, Entry>;
   let l0: SSTable[]; // stored oldest-first; probe order reverses it
@@ -178,6 +178,10 @@ export function createLsmSim(seed: number): LsmSim {
   let eventLog: string[];
 
   function init(): void {
+    // Re-seed the RNG so a reset sim reproduces the same trajectory as a fresh
+    // createLsmSim(seed) call — the advanced RNG state from a prior run must not
+    // carry over into the restarted simulation.
+    rng = mulberry32(seed);
     memtable = new Map();
     l0 = [];
     l1 = [];

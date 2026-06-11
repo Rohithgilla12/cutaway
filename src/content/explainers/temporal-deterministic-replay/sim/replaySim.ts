@@ -224,7 +224,7 @@ function* processOrder(ctx: WorkflowCtx): Generator<Command, void, number> {
 }
 
 export function createReplaySim(seed: number): ReplaySim {
-  const rng = mulberry32(seed);
+  let rng = mulberry32(seed);
 
   let status: WorkerStatus;
   let events: HistoryEvent[];
@@ -263,6 +263,10 @@ export function createReplaySim(seed: number): ReplaySim {
   let replayClockTicks: number;
 
   function init(): void {
+    // Re-seed the RNG so a reset sim reproduces the same trajectory as a fresh
+    // createReplaySim(seed) call — the advanced RNG state from a prior run must
+    // not carry over into the restarted simulation.
+    rng = mulberry32(seed);
     status = "idle";
     events = [];
     nextEventId = 1;

@@ -118,7 +118,7 @@ interface InternalTxn {
 }
 
 export function createWalSim(seed: number): WalSim {
-  const rng = mulberry32(seed);
+  let rng = mulberry32(seed);
 
   let phase: WalPhase;
   let records: StoredRecord[];
@@ -144,6 +144,10 @@ export function createWalSim(seed: number): WalSim {
   let replayStopped: boolean;
 
   function init(): void {
+    // Re-seed the RNG so a reset sim reproduces the same trajectory as a fresh
+    // createWalSim(seed) call — the advanced RNG state from a prior run must not
+    // carry over into the restarted simulation.
+    rng = mulberry32(seed);
     phase = "running";
     records = [];
     lastLsn = 0;

@@ -371,6 +371,47 @@ describe("replaySim — determinism", () => {
     a.reset();
     expect(JSON.stringify(a.snapshot())).toBe(fresh);
   });
+
+  it("reset re-seeds RNG: post-reset trajectory matches a fresh same-seed sim step-for-step", () => {
+    // Exercise the sim through a full lifecycle (consuming RNG state), then reset.
+    // The reset sim must reproduce the exact same sequence of RNG-driven outcomes
+    // (chargeCard amounts, branch decisions) as a freshly constructed same-seed sim.
+    const SEED = 19;
+
+    // Build up and then reset a sim.
+    const resetSim = createReplaySim(SEED);
+    resetSim.start();
+    resetSim.step(2000);
+    resetSim.step(2000);
+    resetSim.crashWorker();
+    resetSim.startReplay();
+    resetSim.replayAll();
+    resetSim.reset();
+
+    // Fresh sim with the same seed.
+    const freshSim = createReplaySim(SEED);
+
+    // Both must start from the same state.
+    expect(JSON.stringify(resetSim.snapshot())).toBe(JSON.stringify(freshSim.snapshot()));
+
+    // Drive both through an identical post-reset sequence and assert JSON-equal at every step.
+    const calls: Array<(s: ReplaySim) => void> = [
+      (s) => s.start(),
+      (s) => s.step(2000),
+      (s) => s.step(2000),
+      (s) => s.step(2000),
+      (s) => s.crashWorker(),
+      (s) => s.startReplay(),
+      (s) => s.replayStep(),
+      (s) => s.replayStep(),
+      (s) => s.replayAll(),
+    ];
+    for (const call of calls) {
+      call(resetSim);
+      call(freshSim);
+      expect(JSON.stringify(resetSim.snapshot())).toBe(JSON.stringify(freshSim.snapshot()));
+    }
+  });
 });
 
 describe("replaySim — event-in-any-state safety (spam)", () => {

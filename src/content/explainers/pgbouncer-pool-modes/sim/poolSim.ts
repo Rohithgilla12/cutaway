@@ -165,7 +165,7 @@ interface InternalClient {
 const ERROR_BACKOFF_MS = 800;
 
 export function createPoolSim(seed: number): PoolSim {
-  const rng = mulberry32(seed);
+  let rng = mulberry32(seed);
 
   let mode: PoolMode;
   let clientCount: number;
@@ -190,6 +190,10 @@ export function createPoolSim(seed: number): PoolSim {
   let eventLog: string[];
 
   function init(): void {
+    // Re-seed the RNG so a reset sim reproduces the same trajectory as a fresh
+    // createPoolSim(seed) call — the advanced RNG state from a prior run must not
+    // carry over into the restarted simulation.
+    rng = mulberry32(seed);
     mode = "session";
     clientCount = DEFAULT_CLIENTS;
     poolSize = DEFAULT_POOL_SIZE;
