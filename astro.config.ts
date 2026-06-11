@@ -6,6 +6,9 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   site: "https://cutaway.gilla.fun",
+  build: {
+    inlineStylesheets: "always",
+  },
   integrations: [mdx(), react(), sitemap()],
   vite: {
     plugins: [tailwindcss()],
