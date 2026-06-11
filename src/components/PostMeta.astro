@@ -1,0 +1,15 @@
+---
+interface Props {
+  number: number;
+  pubDate: Date;
+  minutes: number;
+}
+
+const { number, pubDate, minutes } = Astro.props;
+const num = String(number).padStart(2, "0");
+const date = pubDate.toISOString().slice(0, 10);
+---
+
+<p class="font-mono text-xs tracking-wide text-muted uppercase">
+  cutaway/{num} · {date} · {minutes} min
+</p>
