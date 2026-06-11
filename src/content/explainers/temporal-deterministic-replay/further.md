@@ -14,7 +14,7 @@ their own future explainers.
   one is a clean "external input during a deterministic replay" interaction.
 - **Queries.** A query (`QueryWorkflow`) reads workflow state without mutating
   history — it runs the workflow function up to its current point and returns a
-  derived value, and crucially is *not* recorded as an event. The determinism
+  derived value, and crucially is _not_ recorded as an event. The determinism
   contract still applies (a query handler must not have side effects). Worth its
   own piece on "reading consistent state from a thing that only exists as a log."
 - **Child workflows.** `ExecuteChildWorkflow` schedules a separate workflow
@@ -23,7 +23,7 @@ their own future explainers.
   it replays activities. The sim models only activities and timers. Child-workflow
   fan-out and the parent-close policy are a "composing durable executions" topic.
 - **Schedules / cron.** Temporal Schedules (and the older cron syntax) start new
-  workflow executions on a recurrence. This is orchestration *above* a single
+  workflow executions on a recurrence. This is orchestration _above_ a single
   execution's replay, not part of it; out of scope here.
 
 ## Adjacent depth (one-sentence neighbors)
@@ -57,7 +57,7 @@ their own future explainers.
 - Model the sticky cache explicitly: a "warm worker" path that resumes from cached
   in-memory state with no replay, versus the "cold worker / eviction" path that
   replays the full history. Right now every replay is a full replay.
-- Add a `SideEffect`/`GetVersion` control so the reader can *fix* the injected
+- Add a `SideEffect`/`GetVersion` control so the reader can _fix_ the injected
   `time.Now()` nondeterminism and watch the mismatch turn into a recorded marker.
 - Model an activity timeout + retry on crash as an alternative to the
   complete-server-side simplification, so both crash outcomes are visible.

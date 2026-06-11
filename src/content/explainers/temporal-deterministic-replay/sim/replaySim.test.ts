@@ -1,11 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  createReplaySim,
-  SIMPLIFICATIONS,
-  type ReplaySim,
-  type ReplaySnapshot,
-  type Command,
-} from "./replaySim";
+import { createReplaySim, SIMPLIFICATIONS, type ReplaySim, type ReplaySnapshot, type Command } from "./replaySim";
 
 // Deterministic op driver for sweeps, independent of Math.random.
 function lcg(seed: number): () => number {
@@ -33,10 +27,7 @@ function runOriginalToCompletion(sim: ReplaySim, bigStep = 2000): ReplaySnapshot
 function recordedCommandStrings(snap: ReplaySnapshot): string[] {
   return snap.events
     .filter(
-      (e) =>
-        e.type === "ActivityTaskScheduled" ||
-        e.type === "TimerStarted" ||
-        e.type === "WorkflowExecutionCompleted",
+      (e) => e.type === "ActivityTaskScheduled" || e.type === "TimerStarted" || e.type === "WorkflowExecutionCompleted",
     )
     .map((e) => {
       if (e.type === "ActivityTaskScheduled") return `ActivityTaskScheduled(${e.activity})`;
@@ -59,13 +50,9 @@ function oracleLocalState(snap: ReplaySnapshot): {
   reserved: boolean;
   commandStream: string[];
 } {
-  const chargeCompleted = snap.events.find(
-    (e) => e.type === "ActivityTaskCompleted" && e.activity === "chargeCard",
-  );
+  const chargeCompleted = snap.events.find((e) => e.type === "ActivityTaskCompleted" && e.activity === "chargeCard");
   const amount = chargeCompleted?.result ?? null;
-  const reserved = snap.events.some(
-    (e) => e.type === "ActivityTaskScheduled" && e.activity === "reserveInventory",
-  );
+  const reserved = snap.events.some((e) => e.type === "ActivityTaskScheduled" && e.activity === "reserveInventory");
   return { amount, reserved, commandStream: recordedCommandStrings(snap) };
 }
 
@@ -106,9 +93,7 @@ describe("replaySim — replay reconstruction (crash-point sweep)", () => {
       // Replay's matched command stream is exactly the recorded command stream the
       // pre-crash worker had produced (history is the source of truth, no divergence).
       // The comparison strip records the matched event (recorded side) in event form.
-      const matchedStream = atEdge.comparison
-        .filter((c) => c.outcome === "match")
-        .map((c) => c.recorded);
+      const matchedStream = atEdge.comparison.filter((c) => c.outcome === "match").map((c) => c.recorded);
       // The pre-crash worker's command-producing history is reproduced, in order.
       expect(matchedStream).toEqual(expected.commandStream);
 
@@ -146,9 +131,7 @@ describe("replaySim — recorded results, not re-execution", () => {
     sim2.step(2000); // reserveInventory (taken because amount>100) completes
     const beforeReplay = sim2.snapshot();
     expect(beforeReplay.status).toBe("running");
-    const chargeAmount = beforeReplay.activities.find(
-      (a) => a.activity === "chargeCard",
-    )!.result!;
+    const chargeAmount = beforeReplay.activities.find((a) => a.activity === "chargeCard")!.result!;
     expect(chargeAmount).toBeGreaterThan(100);
 
     sim2.crashWorker();
@@ -322,18 +305,14 @@ describe("replaySim — history append-only", () => {
     sim.step(2000);
     sim.crashWorker();
 
-    const before = sim
-      .snapshot()
-      .events.map((e) => ({ ...e, replayCursor: false }));
+    const before = sim.snapshot().events.map((e) => ({ ...e, replayCursor: false }));
     sim.startReplay();
     sim.replayAll();
     const after = sim.snapshot();
 
     // The prefix of events that existed before replay is unchanged (ignoring the
     // viz-only replayCursor flag). Live continuation may APPEND new events.
-    const afterPrefix = after.events
-      .slice(0, before.length)
-      .map((e) => ({ ...e, replayCursor: false }));
+    const afterPrefix = after.events.slice(0, before.length).map((e) => ({ ...e, replayCursor: false }));
     expect(afterPrefix).toEqual(before);
   });
 });
@@ -418,9 +397,7 @@ describe("replaySim — event-in-any-state safety (spam)", () => {
   it("spamming every method in every status never throws or corrupts", () => {
     const sim = createReplaySim(13);
 
-    const driveTo = (
-      target: "idle" | "running" | "crashed" | "replaying" | "completed",
-    ): void => {
+    const driveTo = (target: "idle" | "running" | "crashed" | "replaying" | "completed"): void => {
       sim.reset();
       if (target === "idle") return;
       sim.start();

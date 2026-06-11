@@ -51,8 +51,7 @@ function abbrev(e: HistoryEvent): string {
 
 function pinDetail(e: HistoryEvent): string {
   const activityLabel = e.activity ?? "";
-  const resultSuffix =
-    e.result !== undefined ? ` → ${e.result} (recorded server-side)` : "";
+  const resultSuffix = e.result !== undefined ? ` → ${e.result} (recorded server-side)` : "";
   return `#${e.eventId} ${e.type}${activityLabel ? ` — ${activityLabel}` : ""}${resultSuffix}`;
 }
 
@@ -64,7 +63,7 @@ interface HistoryTapeProps {
 export function HistoryTape({ events, reducedMotion }: HistoryTapeProps) {
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
 
-  const pinnedEvent = selectedEventId !== null ? events.find((e) => e.eventId === selectedEventId) ?? null : null;
+  const pinnedEvent = selectedEventId !== null ? (events.find((e) => e.eventId === selectedEventId) ?? null) : null;
 
   function handleSelect(eventId: number) {
     setSelectedEventId((prev) => (prev === eventId ? null : eventId));

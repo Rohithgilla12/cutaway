@@ -10,6 +10,7 @@ Legend: ✅ verified (source + confirming text) · ⚠️ simplification (must b
 prose — checked it IS) · ❌ wrong/unverifiable (fixed or cut).
 
 Primary sources used (re-fetched this pass):
+
 - Workflow definition / determinism contract: https://docs.temporal.io/workflow-definition
 - Event History (append-only, Continue-As-New, terminated-at-limit): https://docs.temporal.io/workflow-execution/event
 - Temporal Cloud limits (51,200 / 50 MB / 10,240 / 10 MB): https://docs.temporal.io/cloud/limits
@@ -45,7 +46,7 @@ Primary sources used (re-fetched this pass):
    order is randomized per process).**
    ✅ Go message-passing page contains the EXACT phrase: "Range over map is a nondeterministic
    operation." (In the docs it appears in the Query-handler section noting it is acceptable
-   *in a query function*; the prose uses the literal general truth that map range is
+   _in a query function_; the prose uses the literal general truth that map range is
    nondeterministic, which is what the quote states. Attribution is honest.)
 
 5. **Go workflow code must use `workflow.Go` and workflow channels instead of native
@@ -132,7 +133,7 @@ Primary sources used (re-fetched this pass):
 
 ## E. Workflow-task failure on nondeterminism
 
-17. **On a nondeterminism error the *workflow task* fails, not the workflow *execution*;
+17. **On a nondeterminism error the _workflow task_ fails, not the workflow _execution_;
     history is not modified; the execution is parked, not corrupted.**
     ✅ Failures page: a non-`FailureError` exception "is considered a Workflow Task Failure."
     History preservation is the documented consequence of workflow-task (vs execution) failure.
@@ -218,24 +219,23 @@ Primary sources used (re-fetched this pass):
 
 32. **THE ILLUSTRATIVE AMOUNT (special check).** Prose/caption originally used `amount = 142`
     as the recorded `chargeCard` result and narrated `reserved = true` / the `amount > 100 →
-    reserveInventory` branch.
+reserveInventory` branch.
     ❌→FIXED. Ran a node probe: `createReplaySim(0xdeadbee5)` (the SEED in ReplayViz.tsx),
-    `start()`, stepped until `chargeCard` completed. The ACTUAL recorded result is **98**, not
-    142. 98 ≤ 100 (BRANCH_THRESHOLD), so on the default run the branch is **NOT taken**:
+    `start()`, stepped until `chargeCard` completed. The ACTUAL recorded result is **98**, not 142. 98 ≤ 100 (BRANCH*THRESHOLD), so on the default run the branch is **NOT taken**:
     `reserveInventory` is skipped, `reserved` stays **`false`**, and the scheduled activities
-    are `[chargeCard, sendEmail]` only. The tests confirm this — they deliberately *search for*
+    are `[chargeCard, sendEmail]` only. The tests confirm this — they deliberately \_search for*
     a seed with `amount > 100` rather than use the default (replaySim.test.ts lines 136, 235),
     because the default seed is sub-threshold.
     Corrected in prose: every figure-tied `142` → `98`; `ActComp(=142)` → `ActComp(=98)`;
     `amount = 142 (from history)` / `reserved = true (from history)` → `amount = 98 (from
-    history)` / `reserved = false (from history)`; added an explicit sentence that the default
+history)` / `reserved = false (from history)`; added an explicit sentence that the default
     order is under the `amount > 100` threshold so the branch is skipped. The opening hook's
     `amount` is no longer pinned to a number that contradicts the figure. See Corrections #1.
 
 33. **Experiment 1 (run / crash / replay-step) with FLAT `activities executed`.**
     ✅ Probe: start → step to first activity (activityExecCount = 1) → Crash worker
     (count still 1) → 3× Replay step (count STILL 1). The counter does not move during replay.
-    Matches prose line 52 ("It does not move during replay... A flat counter during replay *is*
+    Matches prose line 52 ("It does not move during replay... A flat counter during replay _is_
     the exactly-once guarantee"). Control names Run / Crash worker / Replay step are real
     (ReplayViz handlers). ✅
 
@@ -266,7 +266,7 @@ Primary sources used (re-fetched this pass):
 
 37. **`WorkflowCode` pseudocode line `if (amount > 100)` matches BRANCH_THRESHOLD = 100.**
     ✅ WorkflowCode.tsx line `"  if (amount > 100) {"` matches the sim's `BRANCH_THRESHOLD =
-    100`. The prose threshold reference (`amount > 100`) now matches both. ✅
+100`. The prose threshold reference (`amount > 100`) now matches both. ✅
 
 ---
 
@@ -309,7 +309,7 @@ Primary sources used (re-fetched this pass):
   sentences and is not expanded into sections. ✅
 - **Question→interaction→interpretation flow**: "The real mechanism" raises the recovery
   question, the figure answers it (Run → Crash → Replay step, flat counter), prose interprets
-  ("A flat counter during replay *is* the exactly-once guarantee"). Failure-modes section does
+  ("A flat counter during replay _is_ the exactly-once guarantee"). Failure-modes section does
   the same with Inject time.Now() and the history edge. ✅
 - **Senior calibration**: assumes OOM kills, status enums, cron sweepers, program counters,
   call stacks, idempotent consumers, MVCC-style checkpoint races — none explained. ✅

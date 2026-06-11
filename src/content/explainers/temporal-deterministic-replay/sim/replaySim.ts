@@ -1,10 +1,4 @@
-export type WorkerStatus =
-  | "idle"
-  | "running"
-  | "crashed"
-  | "replaying"
-  | "failed-nondeterminism"
-  | "completed";
+export type WorkerStatus = "idle" | "running" | "crashed" | "replaying" | "failed-nondeterminism" | "completed";
 
 export type EventType =
   | "WorkflowExecutionStarted"
@@ -18,10 +12,7 @@ export type EventType =
   | "TimerFired"
   | "WorkflowExecutionCompleted";
 
-export type CommandType =
-  | "ScheduleActivityTask"
-  | "StartTimer"
-  | "CompleteWorkflowExecution";
+export type CommandType = "ScheduleActivityTask" | "StartTimer" | "CompleteWorkflowExecution";
 
 export type ActivityName = "chargeCard" | "reserveInventory" | "sendEmail";
 
@@ -298,12 +289,7 @@ export function createReplaySim(seed: number): ReplaySim {
     return ev;
   }
 
-  function setCode(
-    step: WorkflowStepId,
-    line: number,
-    amount: number | null,
-    reserved: boolean | null,
-  ): void {
+  function setCode(step: WorkflowStepId, line: number, amount: number | null, reserved: boolean | null): void {
     code = { step, line, amount, reserved };
   }
 
@@ -397,9 +383,7 @@ export function createReplaySim(seed: number): ReplaySim {
   function completeInFlightActivity(): void {
     if (!inFlight) return;
     const act = inFlight;
-    const view = activities.find(
-      (a) => a.activity === act.activity && a.state !== "completed",
-    );
+    const view = activities.find((a) => a.activity === act.activity && a.state !== "completed");
     appendEvent({
       type: "ActivityTaskStarted",
       payload: `${act.activity}`,
@@ -468,9 +452,7 @@ export function createReplaySim(seed: number): ReplaySim {
     // In-flight activity completes server-side and records its event (simplification).
     if (inFlight) {
       const act = inFlight;
-      const view = activities.find(
-        (a) => a.activity === act.activity && a.state !== "completed",
-      );
+      const view = activities.find((a) => a.activity === act.activity && a.state !== "completed");
       appendEvent({
         type: "ActivityTaskStarted",
         payload: `${act.activity}`,
@@ -486,9 +468,7 @@ export function createReplaySim(seed: number): ReplaySim {
         view.state = "completed";
         view.result = act.result;
       }
-      eventLog.push(
-        `worker crashed; in-flight ${act.activity} still recorded server-side as ${act.result}`,
-      );
+      eventLog.push(`worker crashed; in-flight ${act.activity} still recorded server-side as ${act.result}`);
       inFlight = null;
     } else {
       eventLog.push("worker crashed — in-memory workflow state lost; history intact");
@@ -614,9 +594,7 @@ export function createReplaySim(seed: number): ReplaySim {
       return;
     }
 
-    eventLog.push(
-      `replay matched ${describeCommand(emitted)} against history eventId ${recordedEvent.eventId}`,
-    );
+    eventLog.push(`replay matched ${describeCommand(emitted)} against history eventId ${recordedEvent.eventId}`);
     replayEventCursor += 1;
 
     // A command that started a durable operation (timer / activity) can only advance
@@ -625,19 +603,14 @@ export function createReplaySim(seed: number): ReplaySim {
     // is NOT in history, the operation is still outstanding at the history edge: the
     // workflow blocks and live execution must drive it to completion.
     const completion = completionEventFor(emitted, recordedEvent.eventId);
-    if (
-      (emitted.type === "ScheduleActivityTask" || emitted.type === "StartTimer") &&
-      !completion
-    ) {
+    if ((emitted.type === "ScheduleActivityTask" || emitted.type === "StartTimer") && !completion) {
       continueOutstanding(emitted);
       return;
     }
 
     // feed the recorded result back (chargeCard -> recorded amount, not a fresh draw)
     const resume =
-      emitted.type === "ScheduleActivityTask" && emitted.activity
-        ? (recordedAmounts.get(emitted.activity) ?? 0)
-        : 0;
+      emitted.type === "ScheduleActivityTask" && emitted.activity ? (recordedAmounts.get(emitted.activity) ?? 0) : 0;
     const next = replayGen!.next(resume);
     if (next.done) {
       replayBlocked = null;
@@ -653,18 +626,13 @@ export function createReplaySim(seed: number): ReplaySim {
   function completionEventFor(cmd: Command, afterEventId: number): HistoryEvent | null {
     if (cmd.type === "StartTimer") {
       return (
-        events.find(
-          (e) => e.type === "TimerFired" && e.timerId === cmd.timerId && e.eventId > afterEventId,
-        ) ?? null
+        events.find((e) => e.type === "TimerFired" && e.timerId === cmd.timerId && e.eventId > afterEventId) ?? null
       );
     }
     if (cmd.type === "ScheduleActivityTask") {
       return (
         events.find(
-          (e) =>
-            e.type === "ActivityTaskCompleted" &&
-            e.activity === cmd.activity &&
-            e.eventId > afterEventId,
+          (e) => e.type === "ActivityTaskCompleted" && e.activity === cmd.activity && e.eventId > afterEventId,
         ) ?? null
       );
     }
@@ -689,9 +657,7 @@ export function createReplaySim(seed: number): ReplaySim {
   // on this outstanding operation: switch to live and install the pending op so doStep
   // drives it to completion, then resumes the workflow.
   function continueOutstanding(emitted: Command): void {
-    eventLog.push(
-      `history exhausted at outstanding ${describeCommand(emitted)} — resuming live, awaiting completion`,
-    );
+    eventLog.push(`history exhausted at outstanding ${describeCommand(emitted)} — resuming live, awaiting completion`);
     status = "running";
     gen = replayGen;
     replayGen = null;
@@ -702,13 +668,9 @@ export function createReplaySim(seed: number): ReplaySim {
     } else if (emitted.type === "ScheduleActivityTask" && emitted.activity) {
       const result = executeActivity(emitted.activity);
       recordedAmounts.set(emitted.activity, result);
-      const existing = activities.find(
-        (a) => a.activity === emitted.activity && a.state !== "completed",
-      );
+      const existing = activities.find((a) => a.activity === emitted.activity && a.state !== "completed");
       if (!existing) {
-        const scheduled = events.find(
-          (e) => e.type === "ActivityTaskScheduled" && e.activity === emitted.activity,
-        );
+        const scheduled = events.find((e) => e.type === "ActivityTaskScheduled" && e.activity === emitted.activity);
         activities.push({
           activity: emitted.activity,
           state: "scheduled",
