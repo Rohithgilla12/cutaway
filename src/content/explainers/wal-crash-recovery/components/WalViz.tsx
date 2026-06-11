@@ -4,23 +4,9 @@ import type { WalSnapshot, WalSim } from "../sim/walSim";
 import { WalStrip } from "./WalStrip";
 import { PageGrid } from "./PageGrid";
 import { Controls } from "./Controls";
+import { useReducedMotion, useSimLoop, Stat, EventLog } from "../../../../lib/viz";
 
 const SEED = 0xc0ffee42;
-
-function useReducedMotion(): boolean {
-  const [rm, setRm] = useState(() =>
-    typeof window !== "undefined"
-      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      : false,
-  );
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const handler = (e: MediaQueryListEvent) => setRm(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-  return rm;
-}
 
 function phaseCaption(snap: WalSnapshot): string {
   const last = snap.recoveryLog[snap.recoveryLog.length - 1] ?? "";
@@ -49,8 +35,6 @@ export default function WalViz() {
   const [speed, setSpeed] = useState<0.5 | 1 | 2>(1);
   const reducedMotion = useReducedMotion();
   const rootRef = useRef<HTMLDivElement>(null);
-  const visibleRef = useRef(true);
-  const hiddenRef = useRef(typeof document !== "undefined" ? document.hidden : false);
 
   useEffect(() => {
     setSnap(simRef.current.snapshot());
@@ -60,43 +44,18 @@ export default function WalViz() {
     setSnap(simRef.current.snapshot());
   }, []);
 
-  useEffect(() => {
-    const obs = new IntersectionObserver(
-      (entries) => {
-        visibleRef.current = entries[0]?.isIntersecting ?? true;
-      },
-      { threshold: 0.01 },
-    );
-    if (rootRef.current) obs.observe(rootRef.current);
-    const onVis = () => {
-      hiddenRef.current = document.hidden;
-    };
-    document.addEventListener("visibilitychange", onVis);
-    return () => {
-      obs.disconnect();
-      document.removeEventListener("visibilitychange", onVis);
-    };
+  const stepSim = useCallback((dtMs: number) => {
+    simRef.current.step(dtMs);
   }, []);
 
-  useEffect(() => {
-    if (reducedMotion || paused) return;
-    let raf: number;
-    let last = performance.now();
-    const tick = (now: number) => {
-      if (!visibleRef.current || hiddenRef.current) {
-        last = now;
-        raf = requestAnimationFrame(tick);
-        return;
-      }
-      const dt = Math.min(now - last, 100);
-      last = now;
-      simRef.current.step(dt * speed);
-      setSnap(simRef.current.snapshot());
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [paused, reducedMotion, speed]);
+  useSimLoop({
+    step: stepSim,
+    onFrame: takeSnap,
+    speed,
+    paused,
+    reducedMotion,
+    rootRef,
+  });
 
   const handleCommit = useCallback(() => {
     simRef.current.commit();
@@ -171,11 +130,7 @@ export default function WalViz() {
       />
 
       <div style={{ marginTop: 8 }}>
-        <PageGrid
-          pages={snap.pages}
-          phase={snap.phase}
-          currentReplayLsn={snap.currentReplayLsn}
-        />
+        <PageGrid pages={snap.pages} phase={snap.phase} currentReplayLsn={snap.currentReplayLsn} />
       </div>
 
       <div
@@ -199,22 +154,9 @@ export default function WalViz() {
         <Stat label="phase" value={snap.phase} danger={snap.phase === "crashed"} />
       </div>
 
-      {recentLog.length > 0 && (
-        <div
-          style={{
-            marginTop: 8,
-            padding: "6px 8px",
-            borderTop: "1px solid var(--color-rule)",
-            fontSize: 10,
-            color: "var(--color-muted)",
-            lineHeight: 1.7,
-          }}
-        >
-          {recentLog.map((line, i) => (
-            <div key={i}>{line}</div>
-          ))}
-        </div>
-      )}
+      <div style={{ marginTop: 8 }}>
+        <EventLog lines={recentLog} caption={caption} />
+      </div>
 
       {snap.phase === "crashed" && (
         <div
@@ -262,29 +204,6 @@ export default function WalViz() {
           Stepped mode active (prefers-reduced-motion). Use Step or action buttons to advance.
         </p>
       )}
-    </div>
-  );
-}
-
-interface StatProps {
-  label: string;
-  value: string | number;
-  danger?: boolean;
-}
-
-function Stat({ label, value, danger }: StatProps) {
-  return (
-    <div>
-      <span style={{ color: "var(--color-muted)", fontSize: 10 }}>{label} </span>
-      <span
-        style={{
-          color: danger ? "var(--color-danger)" : "var(--color-ink)",
-          fontWeight: 600,
-          fontSize: 11,
-        }}
-      >
-        {value}
-      </span>
     </div>
   );
 }

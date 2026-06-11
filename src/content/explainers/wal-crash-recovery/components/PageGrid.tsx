@@ -28,24 +28,14 @@ export function PageGrid({ pages, phase, currentReplayLsn }: Props) {
         DATA PAGES
       </div>
 
-      <svg
-        viewBox={`0 0 ${totalW} ${CELL_H}`}
-        width="100%"
-        aria-hidden="true"
-        style={{ display: "block" }}
-      >
+      <svg viewBox={`0 0 ${totalW} ${CELL_H}`} width="100%" aria-hidden="true" style={{ display: "block" }}>
         {pages.map((p, i) => {
           const x = i * (CELL_W + GAP);
           const memWiped = phase === "crashed" || phase === "recovering";
           const memDirty = !crashed && p.memory !== p.disk;
-          const isReplaying =
-            currentReplayLsn !== null && phase === "recovering" && p.memory !== p.disk;
+          const isReplaying = currentReplayLsn !== null && phase === "recovering" && p.memory !== p.disk;
 
-          const memColor = memWiped
-            ? "var(--color-muted)"
-            : memDirty
-              ? "var(--color-pending)"
-              : "var(--color-ok)";
+          const memColor = memWiped ? "var(--color-muted)" : memDirty ? "var(--color-pending)" : "var(--color-ok)";
 
           return (
             <g key={p.pageId}>
@@ -123,11 +113,7 @@ export function PageGrid({ pages, phase, currentReplayLsn }: Props) {
           const memWiped = phase === "crashed" || phase === "recovering";
           const crashed = phase === "crashed" || phase === "recovering" || phase === "recovered";
           const memDirty = !crashed && p.memory !== p.disk;
-          const memColor = memWiped
-            ? "var(--color-muted)"
-            : memDirty
-              ? "var(--color-pending)"
-              : "var(--color-ok)";
+          const memColor = memWiped ? "var(--color-muted)" : memDirty ? "var(--color-pending)" : "var(--color-ok)";
           return (
             <div key={p.pageId} style={{ color: memColor }} title={`mem=${memWiped ? "?" : p.memory} disk=${p.disk}`}>
               <span>{memWiped ? "?" : p.memory}</span>

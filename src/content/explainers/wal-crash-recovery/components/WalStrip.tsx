@@ -1,4 +1,5 @@
 import type { WalRecordView } from "../sim/walSim";
+import { Legend } from "../../../../lib/viz";
 
 interface Props {
   records: WalRecordView[];
@@ -46,20 +47,21 @@ export function WalStrip({ records, lastDurableLsn, checkpointLsn, currentReplay
   const ckIdx = windowed.findLastIndex((r) => r.lsn === checkpointLsn);
   const ckX = ckIdx >= 0 && checkpointLsn !== 0 ? 4 + ckIdx * (BLOCK_W + BLOCK_GAP) : null;
 
-  const legendItems = phase === "recovered"
-    ? [
-        { color: "var(--color-ok)", glyph: "✓", label: "durable" },
-        { color: "var(--color-entity)", glyph: "▸", label: "replayed" },
-        { color: "var(--color-danger)", glyph: "✕", label: "torn" },
-        { color: "var(--color-dead)", glyph: "✕", label: "lost in crash" },
-      ]
-    : [
-        { color: "var(--color-ok)", glyph: "✓", label: "durable" },
-        { color: "var(--color-pending)", glyph: "◌", label: "unsynced" },
-        { color: "var(--color-danger)", glyph: "✕", label: "torn" },
-        { color: "var(--color-entity)", glyph: "▸", label: "replaying" },
-        { color: "var(--color-dead)", glyph: "—", label: "disk-stale" },
-      ];
+  const legendItems =
+    phase === "recovered"
+      ? [
+          { color: "var(--color-ok)", glyph: "✓", label: "durable" },
+          { color: "var(--color-entity)", glyph: "▸", label: "replayed" },
+          { color: "var(--color-danger)", glyph: "✕", label: "torn" },
+          { color: "var(--color-dead)", glyph: "✕", label: "lost in crash" },
+        ]
+      : [
+          { color: "var(--color-ok)", glyph: "✓", label: "durable" },
+          { color: "var(--color-pending)", glyph: "◌", label: "unsynced" },
+          { color: "var(--color-danger)", glyph: "✕", label: "torn" },
+          { color: "var(--color-entity)", glyph: "▸", label: "replaying" },
+          { color: "var(--color-dead)", glyph: "—", label: "disk-stale" },
+        ];
 
   return (
     <div style={{ fontFamily: "var(--font-mono)" }}>
@@ -176,28 +178,11 @@ export function WalStrip({ records, lastDurableLsn, checkpointLsn, currentReplay
             {durableInRightHalf ? " (right edge)" : ""}
           </span>
         )}
-        {ckX !== null && (
-          <span>
-            checkpoint ▸ {checkpointLsn}
-          </span>
-        )}
+        {ckX !== null && <span>checkpoint ▸ {checkpointLsn}</span>}
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "4px 16px",
-          marginTop: 6,
-          fontSize: 10,
-        }}
-      >
-        {legendItems.map(({ color, glyph, label }) => (
-          <span key={label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ color, fontWeight: 700 }}>{glyph}</span>
-            <span style={{ color: "var(--color-muted)" }}>{label}</span>
-          </span>
-        ))}
+      <div style={{ marginTop: 6 }}>
+        <Legend items={legendItems} />
       </div>
     </div>
   );
