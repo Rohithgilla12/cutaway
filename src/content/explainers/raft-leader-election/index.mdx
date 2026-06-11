@@ -1,6 +1,6 @@
 ---
 title: "Raft leader election, but you control the network"
-description: "Five nodes, one network partition, zero stable leaders until a quorum agrees. Kill nodes, cut links, and watch Raft elect a new leader in real time."
+description: "A primary on the wrong side of a partition is still taking writes. The fix is not a faster failover detector — it is a rule about who is allowed to win. Cut the links yourself and watch Raft refuse to elect two leaders."
 number: 2
 pubDate: 2026-06-11
 draft: true
@@ -9,33 +9,82 @@ draft: true
 import Figure from "../../../components/Figure.astro";
 import RaftViz from "./components/RaftViz";
 
-A distributed system needs someone in charge. Raft solves this with a leader: one node that accepts writes, sequences them, and replicates them to the others. The hard part is what happens when that leader goes silent. How does the cluster agree on a replacement — safely, without two nodes both believing they are in charge at once?
+A switch between two racks starts dropping packets. Your primary is on one side, two of its five replicas on the other. The primary never notices it is cut off — from its own view, three peers went quiet, which looks exactly like three peers being slow. It keeps accepting writes. On the other side of the break, the replicas decide the primary is dead and promote one of their own. Now two nodes are taking writes under the same name, and the only thing standing between you and silent divergence is whatever rule decides which writes are real.
 
-The answer involves election timeouts, term numbers, and a quorum rule. The figure below makes all of it observable.
+That rule is the entire point of a consensus protocol. Leader election is the easy-sounding half of Raft, and the half where the dangerous mistakes live, because the failure is not "no leader" — it is "two leaders, both confident, both writing." This piece is about how Raft makes that outcome impossible to commit, even while you are actively trying to engineer it.
+
+## The naive approach
+
+You do not need a paper to elect a leader. Have every node ping every other node a few times a second. If a node stops hearing from the current primary for, say, a second, it concludes the primary is down and the lowest-numbered surviving node takes over. Heartbeat-based failover, the pattern behind a thousand `keepalived` configs and homegrown HA scripts.
+
+It is appealing because it is local and fast. No voting rounds, no shared counter, no quorum math. Each node decides on its own from information it already has — when did I last hear a heartbeat — and the tie-break is a static ID everyone agrees on in advance.
+
+## Why it breaks
+
+Press **Split 2/3** in the figure below. The cluster fractures into a minority of two nodes and a majority of three, and the heartbeat detector does exactly what it promises on both sides at once.
 
 <Figure
   number={1}
   label="raft cluster"
-  caption="Click a node to kill or restart it. Click a link to cut or heal it. Use the preset buttons to trigger partitions."
+  caption="Press Split 2/3 to partition the cluster, then press Client write a few times. Watch the isolated leader's commit counter refuse to move while the majority side elects around it."
 >
   <RaftViz client:visible />
 </Figure>
 
-Each node is a follower until its election timer expires. When that happens it increments its term, declares itself a candidate, and solicits votes from peers. A node that wins a quorum — three of five — becomes leader for that term and immediately starts sending heartbeats to suppress everyone else's timers. If the leader goes quiet (killed, or isolated by a partition), followers time out and a new election begins.
+The minority side stops hearing the leader and wants to promote. The majority side stops hearing the leader and wants to promote. Under pure heartbeat failover, both sides do — each is missing some peers, each times out, each picks a survivor, and now two nodes answer to the title of primary. Writes land on both. When the partition heals, you have two divergent histories and no principled way to merge them, because nothing in the protocol ever decided which set of writes counted. Lowest-ID tie-breaking does not save you: a partition can put a low-ID node on each side.
 
-The amber arc around each follower and candidate is its election timer depleting. When it reaches full, an election fires. Leaders show no arc because they never time out — they heartbeat instead.
+The detector is not the problem. A partition is genuinely indistinguishable from a dead peer when all you have is the absence of heartbeats. The problem is that the detector is allowed to grant authority unilaterally. What is missing is a rule that makes "I should lead" require the agreement of more nodes than can exist on the losing side of any single partition.
 
-## What to watch
+## The real mechanism
 
-**Normal operation.** Let the cluster run. One node will win the first election and settle into sending heartbeats. The other nodes' timers keep resetting. The event log shows each heartbeat round as an `AppendEntries` message; committed log entries advance the `commit` counter in the node panel.
+Raft adds two things the naive scheme lacks: a logical clock that orders leadership claims, and a vote that no node will cast twice.
 
-**Leader failure.** Click the leader node (marked L) to kill it. The remaining four nodes' timers start advancing; one will time out first, start an election, and — provided it can reach a quorum of the other three — win and become the new leader. Watch the term number increment.
+The logical clock is the **term**. Every leadership attempt happens in a numbered term, and terms only ever increase. A node bumps its term when it decides to run, stamps that term on every message, and the moment it sees a message carrying a term higher than its own, it accepts that the world has moved on and reverts to follower. Terms are not wall-clock time; they are an ever-rising sequence number that lets any two nodes compare "who is more current" without a shared clock.
 
-**Partition.** Press **Split 2/3** to divide the cluster into nodes 0–1 (minority) and 2–4 (majority). If the current leader is in the minority partition, it keeps sending heartbeats to 0–1 but can never commit anything — it cannot reach three nodes. Meanwhile 2–4 elect a new leader at a higher term. When you press **Heal all**, the old minority leader receives a heartbeat from the new higher-term leader, sees the higher term, and immediately steps down. No committed entry is lost; the minority leader's uncommitted log entries are overwritten.
+Election is driven by timeouts, and the timeouts are randomized on purpose. Each follower runs an election timer; if it fires before a heartbeat resets it, the follower increments its term, becomes a candidate, votes for itself, and asks every peer for a vote. The randomization — each node picks a fresh timeout from a range — is what keeps the nodes from all timing out at once and splitting the vote. The amber arc around each follower in the figure is that timer draining; a leader shows no arc because it heartbeats instead of timing out.
 
-**Split brain annotation.** During the window after a partition but before the minority leader steps down, two nodes may simultaneously believe they are leader. The visualization annotates this state explicitly: watch for the amber banner that identifies the stale minority leader and explains why it cannot commit.
+The vote is where safety actually lives. **Each node grants at most one vote per term, and that grant is persisted before the reply is sent.** Combined with the requirement that a candidate must collect a strict majority — three of five — this is the whole guarantee. Any two majorities of a five-node cluster share at least one node, and that shared node will not vote for two different candidates in the same term. So two candidates cannot both reach three votes in term N. At most one leader per term, under any sequence of partitions and timeouts you can throw at it. That is the invariant the simulation is built to preserve, and it is the one you should try hardest to break.
+
+> The sim persists `term`, `votedFor`, and the `log` across a node restart (click Restart on a dead node), and resets only volatile state, matching Raft's split of persistent versus volatile state in §5. A real deployment fsyncs those three fields before replying to a vote; the sim updates them synchronously and skips modeling the disk write.
+
+Three experiments make the mechanism concrete.
+
+**Kill the leader and watch one timeout.** Click the node marked **L** to kill it. The surviving followers' arcs start advancing; because the timeouts are randomized, one node reaches its threshold first, bumps the term, and requests votes before the others wake up. It collects three of the four survivors and the election log shows a single clean term increment. Start to finish, the gap is roughly one election timeout — here scaled to the 1.5–3 s human-watchable range; in production it is milliseconds.
+
+**Isolate the leader and create your two-leaders moment.** With a leader settled, press **Isolate leader** to cut every link to it. The old leader is now alone in term N. It does not step down — nothing has told it to, so it keeps believing it leads and keeps its title. The four reachable nodes time out and elect a new leader in term N+1. The annotation line under the graph names both: the stale minority leader at the lower term that cannot commit, and the real majority leader at the higher term. Both wear the L glyph. This is the split brain the naive scheme could not prevent — except here it is harmless, and the next experiment shows why.
+
+**Write to the stale leader and watch the commit index freeze.** While the leader is isolated, press **Client write** a few times. The entries append to the stale leader's log — its `log` count climbs in the node panel — but its `commit` counter does not move. A write commits only when the leader replicates it to a majority, and the isolated leader can reach exactly one node: itself. Those entries are accepted, durable nowhere, acknowledged to no client. Now press **Heal all**. The stale leader receives a heartbeat stamped with term N+1, sees a term higher than its own, and steps down to follower on the spot. Its uncommitted entries — the ones whose commit index never advanced — are overwritten by the real leader's log. No acknowledged write is lost, because none of those writes was ever acknowledged as committed.
+
+That is the answer to the opening outage. The partitioned primary can keep *accepting* writes all day; what it cannot do is *commit* them, because commit requires a majority and the majority is on the other side of the break.
+
+## Failure modes
+
+The election restriction is where the safety story gets subtle, because "majority agrees" is not quite enough on its own.
+
+**Split votes.** If two followers time out close together, each can win a couple of votes and neither reaches three; the term ends with no leader and everyone tries again. Randomized timeouts make a repeated tie statistically rare, but the recovery path is nothing more than another term. You can provoke this by stepping the sim slowly after a leader kill and catching two candidates in the same term — the election log shows the term advancing with no `elected` line, then a fresh attempt.
+
+**The up-to-date rule (§5.4.1).** A majority of votes is necessary but not sufficient: a node missing committed entries must never win, or it would erase them. So a voter refuses any candidate whose log is less up-to-date than its own, judged by last-log-term first, then last-log-index. You can stage this. Cut one node off (click its links) before issuing some client writes, so it misses them; heal it; then kill the leader. The stale node's timer may fire first and it will beg for votes — and the nodes that hold the newer entries will refuse it, because its last log term and index are behind theirs. It cannot win despite being alive and willing. Election authority is gated on log currency, not liveness alone.
+
+**Why a 2/5 partition can never elect.** Two nodes cannot reach three votes no matter how long they try, even among themselves, because the third vote physically lives on the other side of the partition. A minority partition is permanently leaderless by construction. This is the same quorum-intersection fact viewed from the losing side, and it is why an even split of an even-sized cluster is a configuration to avoid — five nodes tolerate two failures, four nodes also tolerate only one, so the odd count is not an accident.
+
+## How etcd, Consul, and CockroachDB actually do this
+
+Raft is not a paper exercise; it is the consensus layer under etcd (and therefore Kubernetes), Consul, and CockroachDB's per-range replication. The numbers they ship with are the part worth memorizing.
+
+etcd defaults the **heartbeat interval to 100 ms** and the **election timeout to 1000 ms** — a 10:1 ratio. Its tuning guidance frames the election timeout as needing to be at least ten times the round-trip time between members so network jitter does not trigger spurious elections, and it permits values up to 50000 ms for globally distributed clusters where a round-trip can itself be hundreds of milliseconds. The Raft paper's own recommendation is tighter, an election timeout in the **150–300 ms** range (§5.2), chosen so a real leader failure is detected fast while split votes stay rare. The sim scales both up by roughly an order of magnitude — 1.5–3 s election timeouts, 500 ms heartbeats — only so the dynamics are watchable; nothing about the algorithm changes with the constants.
+
+> The sim sends the entire log suffix after `prevLogIndex` in each AppendEntries, and a follower that rejects backs the leader off one index per round. Real implementations batch and cap entries per RPC and use the conflict-term optimization from §5.3 to skip whole terms at once. The convergence is identical; the sim is slower and simpler about getting there.
+
+One commit rule is too sharp to skip and too deep to expand here. A leader replicates entries left over from previous terms, but it is not allowed to consider such an entry committed merely because a majority now stores it. It may only count replicas for entries from its *own* current term, and prior-term entries commit indirectly, carried along once a current-term entry above them commits (§5.4.2). The reason is Figure 8 of the paper: a leader that committed a prior-term entry by replica count could later see that same entry overwritten by a different leader, which would mean committing and then losing the same entry. The sim enforces this — `maybeAdvanceCommit` only advances on a current-term entry — and the full walk-through of Figure 8 lives in this explainer's parking-lot notes rather than here, because it is a log-replication subtlety, not an election one.
+
+## When Raft is worth it
+
+Reach for Raft when an acknowledged write must survive the loss of a minority of nodes with zero divergence — config stores, lock services, the source of truth a hundred other services read from. The cost is concrete: every committed write pays a round-trip to a majority before it is acknowledged, so your write latency floors at the slowest node in the fastest majority, and a minority partition stops accepting writes entirely rather than risk a second history. That unavailability is the feature; it is the protocol choosing consistency over writing into the void.
+
+If your data can tolerate a bounded reconciliation window — if "last writer wins" or a CRDT merge is acceptable, or an upstream source can replay — then single-primary-with-failover is cheaper and you do not need a vote on every commit. The line is exactly the opening scenario: if two primaries taking writes during a partition is a recoverable nuisance, skip the quorum tax. If it is a corrupted ledger and a regulator's phone call, pay it.
 
 ## Sources
 
-- Diego Ongaro and John Ousterhout, [In Search of an Understandable Consensus Algorithm (Extended Version)](https://raft.github.io/raft.pdf) — the Raft paper; §5 covers leader election and log replication.
-- [The Raft website](https://raft.github.io/) — animated visualization and links to implementations.
+- Diego Ongaro and John Ousterhout, [In Search of an Understandable Consensus Algorithm (Extended Version)](https://raft.github.io/raft.pdf) — terms and the at-most-one-leader-per-term argument (§5.2), the persisted single vote and majority rule (§5.2), the election restriction on up-to-date logs (§5.4.1), and the current-term commit rule with Figure 8 (§5.4.2).
+- [The Raft website](https://raft.github.io/) — the canonical animated visualization and the list of production implementations.
+- etcd documentation, [Tuning](https://etcd.io/docs/v3.5/tuning/) — the 100 ms heartbeat / 1000 ms election-timeout defaults, the ≥10× round-trip-time guidance, and the 50000 ms ceiling for globally distributed clusters.
