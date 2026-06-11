@@ -155,7 +155,7 @@ export default function WalViz() {
       </div>
 
       <div style={{ marginTop: 8 }}>
-        <EventLog lines={recentLog} caption={caption} />
+        <EventLog lines={recentLog} />
       </div>
 
       {snap.phase === "crashed" && (

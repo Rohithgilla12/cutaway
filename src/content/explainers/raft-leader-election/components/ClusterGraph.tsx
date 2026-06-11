@@ -1,3 +1,5 @@
+import { useState } from "react";
+import type React from "react";
 import type { RaftSnapshot, NodeView, LinkView, MessageView, Role } from "../sim/raftSim";
 
 const VIEW_W = 700;
@@ -93,24 +95,51 @@ function TimerArc({ cx, cy, r, pct }: TimerArcProps) {
 interface NodeCircleProps {
   node: NodeView;
   onNodeClick: (id: number) => void;
+  focused: boolean;
+  onFocus: (key: string) => void;
+  onBlur: () => void;
 }
 
-function NodeCircle({ node, onNodeClick }: NodeCircleProps) {
+function NodeCircle({ node, onNodeClick, focused, onFocus, onBlur }: NodeCircleProps) {
   const [nx, ny] = NODE_POSITIONS[node.id];
   const fill = roleFill(node.role);
   const stroke = roleStroke(node.role);
   const labelColor = roleLabelColor(node.role);
   const glyph = roleGlyph(node.role);
+  const action = node.role === "dead" ? "restart" : "kill";
+  const focusKey = `node-${node.id}`;
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onNodeClick(node.id);
+    }
+  };
 
   return (
     <g
       onClick={() => onNodeClick(node.id)}
-      style={{ cursor: "pointer" }}
+      onKeyDown={handleKeyDown}
+      onFocus={() => onFocus(focusKey)}
+      onBlur={onBlur}
+      tabIndex={0}
+      style={{ cursor: "pointer", outline: "none" }}
       role="button"
-      aria-label={`Node ${node.id} (${node.role}) — click to kill or restart`}
+      aria-label={`node n${node.id} — ${action}`}
     >
       {node.role !== "dead" && node.role !== "leader" && <TimerArc cx={nx} cy={ny} r={NODE_R} pct={node.timerPct} />}
-      <circle cx={nx} cy={ny} r={NODE_R + 12} fill="transparent" stroke="none" />
+      {focused && (
+        <circle
+          cx={nx}
+          cy={ny}
+          r={NODE_R + 6}
+          fill="none"
+          stroke="var(--color-entity)"
+          strokeWidth={3}
+          opacity={0.8}
+        />
+      )}
+      <circle cx={nx} cy={ny} r={43} fill="transparent" stroke="none" />
       <circle
         cx={nx}
         cy={ny}
@@ -122,28 +151,16 @@ function NodeCircle({ node, onNodeClick }: NodeCircleProps) {
       />
       <text
         x={nx}
-        y={ny - 6}
+        y={ny}
         textAnchor="middle"
         dominantBaseline="middle"
-        fontSize={15}
+        fontSize={26}
         fontWeight="600"
         fill={labelColor}
         fontFamily="var(--font-mono)"
         opacity={node.role === "dead" ? 0.6 : 1}
       >
         {glyph}
-      </text>
-      <text
-        x={nx}
-        y={ny + 10}
-        textAnchor="middle"
-        dominantBaseline="middle"
-        fontSize={12}
-        fill={labelColor}
-        fontFamily="var(--font-mono)"
-        opacity={node.role === "dead" ? 0.5 : 1}
-      >
-        n{node.id}
       </text>
     </g>
   );
@@ -152,23 +169,50 @@ function NodeCircle({ node, onNodeClick }: NodeCircleProps) {
 interface LinkLineProps {
   link: LinkView;
   onLinkClick: (a: number, b: number) => void;
+  focused: boolean;
+  onFocus: (key: string) => void;
+  onBlur: () => void;
 }
 
-function LinkLine({ link, onLinkClick }: LinkLineProps) {
+function LinkLine({ link, onLinkClick, focused, onFocus, onBlur }: LinkLineProps) {
   const [ax, ay] = NODE_POSITIONS[link.a];
   const [bx, by] = NODE_POSITIONS[link.b];
 
   const strokeColor = link.up ? "var(--color-rule)" : "var(--color-dead)";
   const dashArray = link.up ? undefined : "6,4";
+  const action = link.up ? "cut" : "heal";
+  const focusKey = `link-${link.a}-${link.b}`;
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onLinkClick(link.a, link.b);
+    }
+  };
 
   return (
     <g
       onClick={() => onLinkClick(link.a, link.b)}
-      style={{ cursor: "pointer" }}
+      onKeyDown={handleKeyDown}
+      onFocus={() => onFocus(focusKey)}
+      onBlur={onBlur}
+      tabIndex={0}
+      style={{ cursor: "pointer", outline: "none" }}
       role="button"
-      aria-label={`Link n${link.a}–n${link.b} (${link.up ? "up" : "cut"}) — click to cut or heal`}
+      aria-label={`link n${link.a}–n${link.b} — ${action}`}
     >
-      <line x1={ax} y1={ay} x2={bx} y2={by} stroke="transparent" strokeWidth={24} />
+      {focused && (
+        <line
+          x1={ax}
+          y1={ay}
+          x2={bx}
+          y2={by}
+          stroke="var(--color-entity)"
+          strokeWidth={5}
+          opacity={0.6}
+        />
+      )}
+      <line x1={ax} y1={ay} x2={bx} y2={by} stroke="transparent" strokeWidth={84} />
       <line
         x1={ax}
         y1={ay}
@@ -205,24 +249,52 @@ interface Props {
 }
 
 export function ClusterGraph({ snap, onNodeClick, onLinkClick }: Props) {
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
+
   return (
-    <svg
-      viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-      width="100%"
-      aria-label="Raft cluster — 5 nodes in a pentagon. Click a node to kill or restart it. Click a link to cut or heal it."
-      style={{ display: "block" }}
-    >
-      {snap.links.map((link) => (
-        <LinkLine key={`${link.a}-${link.b}`} link={link} onLinkClick={onLinkClick} />
-      ))}
+    <>
+      <svg
+        viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+        width="100%"
+        aria-label="Raft cluster — 5 nodes in a pentagon. Click or press Enter/Space on a node to kill or restart it. Click or press Enter/Space on a link to cut or heal it."
+        style={{ display: "block" }}
+      >
+        {snap.links.map((link) => (
+          <LinkLine
+            key={`${link.a}-${link.b}`}
+            link={link}
+            onLinkClick={onLinkClick}
+            focused={focusedKey === `link-${link.a}-${link.b}`}
+            onFocus={setFocusedKey}
+            onBlur={() => setFocusedKey(null)}
+          />
+        ))}
 
-      {snap.messages.map((msg) => (
-        <MessageDot key={msg.id} msg={msg} />
-      ))}
+        {snap.messages.map((msg) => (
+          <MessageDot key={msg.id} msg={msg} />
+        ))}
 
-      {snap.nodes.map((node) => (
-        <NodeCircle key={node.id} node={node} onNodeClick={onNodeClick} />
-      ))}
-    </svg>
+        {snap.nodes.map((node) => (
+          <NodeCircle
+            key={node.id}
+            node={node}
+            onNodeClick={onNodeClick}
+            focused={focusedKey === `node-${node.id}`}
+            onFocus={setFocusedKey}
+            onBlur={() => setFocusedKey(null)}
+          />
+        ))}
+      </svg>
+      <p
+        style={{
+          fontSize: 10,
+          color: "var(--color-muted)",
+          margin: "2px 0 0",
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        clockwise from top: n0 · n1 · n2 · n3 · n4
+      </p>
+    </>
   );
 }

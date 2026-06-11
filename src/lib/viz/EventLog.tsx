@@ -1,15 +1,17 @@
 interface EventLogProps {
   lines: string[];
-  caption: string;
+  caption?: string;
 }
 
 export function EventLog({ lines, caption }: EventLogProps) {
   if (lines.length === 0) return null;
   return (
     <>
-      <div aria-live="polite" className="sr-only">
-        {caption}
-      </div>
+      {caption !== undefined && (
+        <div aria-live="polite" className="sr-only">
+          {caption}
+        </div>
+      )}
       <div
         style={{
           padding: "6px 8px",

@@ -8,6 +8,8 @@ import { useReducedMotion, useSimLoop, Legend, Stat, EventLog } from "../../../.
 
 const SEED = 0xdead_beef;
 
+// m1: two-instance pattern — simRef owns live state; second instance provides
+// the lazy initial snapshot without reading simRef.current in useState init.
 function initialSim(): RaftSim {
   return createRaftSim(SEED);
 }
@@ -46,9 +48,10 @@ const LEGEND_ITEMS = [
   { color: "var(--color-ink)", glyph: "F", label: "follower" },
   { color: "var(--color-dead)", glyph: "✕", label: "dead" },
   { color: "var(--color-dead)", glyph: "╌", label: "cut link" },
+  { color: "var(--color-pending)", glyph: "◔", label: "election timer" },
   { color: "var(--color-pending)", glyph: "●", label: "RequestVote" },
-  { color: "var(--color-ok)", glyph: "●", label: "vote reply" },
-  { color: "var(--color-entity)", glyph: "●", label: "AppendEntries/heartbeat" },
+  { color: "var(--color-ok)", glyph: "●", label: "vote granted (reply)" },
+  { color: "var(--color-entity)", glyph: "●", label: "AppendEntries / reply" },
 ];
 
 export default function RaftViz() {
@@ -179,7 +182,6 @@ export default function RaftViz() {
             borderRadius: 3,
             letterSpacing: "0.01em",
           }}
-          aria-live="polite"
         >
           {annotation}
         </div>
@@ -224,7 +226,7 @@ export default function RaftViz() {
       />
 
       <div style={{ marginTop: 8 }}>
-        <EventLog lines={recentLog} caption={caption} />
+        <EventLog lines={recentLog} />
       </div>
 
       <RaftControls
