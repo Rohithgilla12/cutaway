@@ -12,7 +12,7 @@ const annotation = `FIG. ${String(number).padStart(2, "0")} — ${label.toUpperC
 <figure class="my-10 border border-ink bg-raised">
   <figcaption class="flex items-baseline justify-between border-b border-ink px-3 py-1.5 font-mono text-[11px] tracking-wider">
     <span>{annotation}</span>
-    <span class="text-muted">INTERACTIVE</span>
+    <span class="text-muted flex-shrink-0" aria-hidden="true">INTERACTIVE</span>
   </figcaption>
   <div class="p-4">
     <slot />
