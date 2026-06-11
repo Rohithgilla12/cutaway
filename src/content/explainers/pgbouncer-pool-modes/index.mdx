@@ -41,7 +41,7 @@ The figure below makes the arithmetic concrete. Baseline per-backend memory is a
 <Figure
   number={2}
   label="the cost of a backend"
-  caption="Slide to 5,000 connections and watch the bar pass 64 GB RAM — all estimates, with the real parameter name work_mem. The pooled row shows the same 5,000 clients routed through ~625 server connections (8 clients per server conn.), which keeps total memory under 7 GB (est.)."
+  caption="Slide to 5,000 connections and watch the bar pass 64 GB RAM — all estimates, with the real parameter name work_mem. The pooled row shows the same 5,000 clients routed through ~625 server connections (8 clients per server conn.), which keeps total memory under 9 GB (est.) — an order of magnitude below the unpooled fleet."
 >
   <BackendCostViz client:visible />
 </Figure>
