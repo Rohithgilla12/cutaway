@@ -1,0 +1,125 @@
+@import "tailwindcss";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/400-italic.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+
+@theme {
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+
+  --color-paper: #fcfcfa;
+  --color-raised: #ffffff;
+  --color-ink: #16181a;
+  --color-muted: #6b6f76;
+  --color-rule: #e4e2dc;
+
+  --color-ok: #1a7f4b;
+  --color-danger: #c0392b;
+  --color-pending: #b07d10;
+  --color-entity: #0b66c3;
+  --color-dead: #8a8f98;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-paper: #0e1013;
+    --color-raised: #15181c;
+    --color-ink: #e6e8ea;
+    --color-muted: #9aa0a6;
+    --color-rule: #2a2f36;
+
+    --color-ok: #3fb950;
+    --color-danger: #f85149;
+    --color-pending: #d29922;
+    --color-entity: #58a6ff;
+    --color-dead: #6e7681;
+  }
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-mono);
+  letter-spacing: -0.02em;
+}
+
+.prose {
+  max-width: 65ch;
+  font-size: 1.0625rem;
+  line-height: 1.7;
+}
+
+.prose p,
+.prose ul,
+.prose ol,
+.prose blockquote {
+  margin-block: 1.25em;
+}
+
+.prose h2 {
+  font-size: 1.375rem;
+  font-weight: 600;
+  margin-block: 2.5em 1em;
+}
+
+.prose h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-block: 2em 1em;
+}
+
+.prose a {
+  color: var(--color-entity);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--color-raised);
+  border: 1px solid var(--color-rule);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+.prose pre {
+  background: var(--color-raised);
+  border: 1px solid var(--color-rule);
+  border-radius: 6px;
+  padding: 1rem;
+  overflow-x: auto;
+  font-size: 0.875rem;
+}
+
+.prose pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.prose blockquote {
+  border-left: 2px solid var(--color-rule);
+  padding-left: 1.25em;
+  color: var(--color-muted);
+}
+
+.prose ul {
+  list-style: disc;
+  padding-left: 1.5em;
+}
+
+.prose ol {
+  list-style: decimal;
+  padding-left: 1.5em;
+}
