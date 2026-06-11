@@ -5,11 +5,7 @@ export interface LogEntry {
   value: number;
 }
 
-export type MessageKind =
-  | "RequestVote"
-  | "RequestVoteReply"
-  | "AppendEntries"
-  | "AppendEntriesReply";
+export type MessageKind = "RequestVote" | "RequestVoteReply" | "AppendEntries" | "AppendEntriesReply";
 
 export interface MessageView {
   id: number;
@@ -167,16 +163,11 @@ export function createRaftSim(seed: number): RaftSim {
   let nextWriteValue: number;
 
   function randTimeout(): number {
-    return (
-      ELECTION_TIMEOUT_MIN_MS +
-      Math.floor(rng() * (ELECTION_TIMEOUT_MAX_MS - ELECTION_TIMEOUT_MIN_MS + 1))
-    );
+    return ELECTION_TIMEOUT_MIN_MS + Math.floor(rng() * (ELECTION_TIMEOUT_MAX_MS - ELECTION_TIMEOUT_MIN_MS + 1));
   }
 
   function randLatency(): number {
-    return (
-      LATENCY_MIN_MS + Math.floor(rng() * (LATENCY_MAX_MS - LATENCY_MIN_MS + 1))
-    );
+    return LATENCY_MIN_MS + Math.floor(rng() * (LATENCY_MAX_MS - LATENCY_MIN_MS + 1));
   }
 
   function log(line: string): void {
@@ -233,13 +224,7 @@ export function createRaftSim(seed: number): RaftSim {
     return !downLinks.has(linkKey(a, b));
   }
 
-  function send(
-    from: number,
-    to: number,
-    kind: MessageKind,
-    term: number,
-    payload: Payload,
-  ): void {
+  function send(from: number, to: number, kind: MessageKind, term: number, payload: Payload): void {
     // A message is created even if the link is currently down; it is dropped on
     // delivery (or mid-flight if the link is cut later). The sender does not
     // observe link state. But a dead sender produces nothing.
@@ -382,8 +367,7 @@ export function createRaftSim(seed: number): RaftSim {
 
     // Consistency check (§5.3): our log must contain prevLogIndex with prevLogTerm.
     const consistent =
-      p.prevLogIndex === 0 ||
-      (p.prevLogIndex <= n.log.length && termAt(n, p.prevLogIndex) === p.prevLogTerm);
+      p.prevLogIndex === 0 || (p.prevLogIndex <= n.log.length && termAt(n, p.prevLogIndex) === p.prevLogTerm);
 
     if (!consistent) {
       send(n.id, msg.from, "AppendEntriesReply", n.currentTerm, {
@@ -680,9 +664,7 @@ export function createRaftSim(seed: number): RaftSim {
       log: n.log.map((e) => ({ ...e })),
       commitIndex: n.commitIndex,
       timerPct:
-        !n.alive || n.role === "leader"
-          ? 0
-          : Math.max(0, Math.min(1, n.electionElapsedMs / n.electionTimeoutMs)),
+        !n.alive || n.role === "leader" ? 0 : Math.max(0, Math.min(1, n.electionElapsedMs / n.electionTimeoutMs)),
       votesGranted: [...n.votesGranted].sort((x, y) => x - y),
       committedValues: committedValues(n),
     }));

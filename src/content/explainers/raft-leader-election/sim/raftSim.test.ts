@@ -31,9 +31,15 @@ type Op =
   | { t: "write" };
 
 const PARTITION_PRESETS: number[][][] = [
-  [[0, 1], [2, 3, 4]],
+  [
+    [0, 1],
+    [2, 3, 4],
+  ],
   [[0], [1, 2, 3, 4]],
-  [[0, 1, 2], [3, 4]],
+  [
+    [0, 1, 2],
+    [3, 4],
+  ],
   [[0, 1], [2], [3, 4]],
 ];
 
@@ -129,17 +135,13 @@ describe("Election Safety: at most one leader per term (sweep)", () => {
         for (const [term, ids] of byTerm) {
           // Within a single snapshot there must be at most one leader per term.
           const distinct = [...new Set(ids)];
-          expect(
-            distinct.length,
-            `seed ${seed}: term ${term} has leaders ${distinct.join(",")}`,
-          ).toBeLessThanOrEqual(1);
+          expect(distinct.length, `seed ${seed}: term ${term} has leaders ${distinct.join(",")}`).toBeLessThanOrEqual(
+            1,
+          );
           const leader = distinct[0];
           const prev = leaderOfTerm.get(term);
           if (prev !== undefined) {
-            expect(
-              prev,
-              `seed ${seed}: term ${term} had leader n${prev} then n${leader}`,
-            ).toBe(leader);
+            expect(prev, `seed ${seed}: term ${term} had leader n${prev} then n${leader}`).toBe(leader);
           } else {
             leaderOfTerm.set(term, leader);
           }
@@ -179,10 +181,9 @@ describe("Vote Safety: one vote per term", () => {
           }
           const prior = perNode.get(n.currentTerm);
           if (prior !== undefined) {
-            expect(
-              prior,
-              `seed ${seed}: n${n.id} voted n${prior} then n${n.votedFor} in term ${n.currentTerm}`,
-            ).toBe(n.votedFor);
+            expect(prior, `seed ${seed}: n${n.id} voted n${prior} then n${n.votedFor} in term ${n.currentTerm}`).toBe(
+              n.votedFor,
+            );
           } else {
             perNode.set(n.currentTerm, n.votedFor);
           }
@@ -237,25 +238,17 @@ describe("Split-brain refusal", () => {
       snap = sim.snapshot();
       const oldLeaderNode = snap.nodes.find((n) => n.id === oldLeader)!;
       // It may still *claim* leadership in its stale term but cannot commit further.
-      expect(
-        oldLeaderNode.commitIndex,
-        `seed ${seed}: stranded leader advanced commitIndex`,
-      ).toBe(preCommit);
+      expect(oldLeaderNode.commitIndex, `seed ${seed}: stranded leader advanced commitIndex`).toBe(preCommit);
 
       // The majority side elects a new leader in a higher term, eventually.
       let majorityLeader: NodeView | undefined;
       for (let k = 0; k < 80; k++) {
         sim.step(150);
         snap = sim.snapshot();
-        majorityLeader = snap.nodes.find(
-          (n) => majority.includes(n.id) && n.role === "leader",
-        );
+        majorityLeader = snap.nodes.find((n) => majority.includes(n.id) && n.role === "leader");
         if (majorityLeader) break;
       }
-      expect(
-        majorityLeader,
-        `seed ${seed}: majority failed to elect a leader`,
-      ).toBeDefined();
+      expect(majorityLeader, `seed ${seed}: majority failed to elect a leader`).toBeDefined();
       expect(majorityLeader!.currentTerm).toBeGreaterThan(leaders[0].currentTerm);
     }
   });
@@ -317,10 +310,9 @@ describe("Step-down on heal", () => {
           const nb = alive[b];
           const minCommit = Math.min(na.commitIndex, nb.commitIndex);
           for (let i = 0; i < minCommit; i++) {
-            expect(
-              na.log[i],
-              `seed ${seed}: committed entry ${i + 1} differs between n${na.id} and n${nb.id}`,
-            ).toEqual(nb.log[i]);
+            expect(na.log[i], `seed ${seed}: committed entry ${i + 1} differs between n${na.id} and n${nb.id}`).toEqual(
+              nb.log[i],
+            );
           }
         }
       }
@@ -440,7 +432,10 @@ describe("Determinism", () => {
       a.clientWrite();
     }
     a.killNode(1);
-    a.partition([[0, 1], [2, 3, 4]]);
+    a.partition([
+      [0, 1],
+      [2, 3, 4],
+    ]);
     a.reset();
     expect(JSON.stringify(a.snapshot())).toBe(fresh);
   });
@@ -456,7 +451,10 @@ describe("Spam safety: all methods in all states", () => {
       sim.restartNode(Math.floor(r() * NODE_COUNT));
       sim.cutLink(0, 1);
       sim.healLink(0, 1);
-      sim.partition([[0, 1], [2, 3, 4]]);
+      sim.partition([
+        [0, 1],
+        [2, 3, 4],
+      ]);
       sim.healAll();
       sim.clientWrite();
     };
@@ -505,9 +503,7 @@ describe("Spam safety: all methods in all states", () => {
       else sim.clientWrite();
       const snap = sim.snapshot();
       for (const n of snap.nodes) {
-        expect(n.currentTerm, `n${n.id} term went backwards`).toBeGreaterThanOrEqual(
-          lastTerm[n.id],
-        );
+        expect(n.currentTerm, `n${n.id} term went backwards`).toBeGreaterThanOrEqual(lastTerm[n.id]);
         lastTerm[n.id] = n.currentTerm;
       }
     }
@@ -560,9 +556,7 @@ describe("Vote restriction (§5.4.1)", () => {
       }
       snap = sim.snapshot();
       const behindLen = snap.nodes.find((n) => n.id === behind)!.log.length;
-      const majorityMaxLen = Math.max(
-        ...snap.nodes.filter((n) => n.id !== behind).map((n) => n.log.length),
-      );
+      const majorityMaxLen = Math.max(...snap.nodes.filter((n) => n.id !== behind).map((n) => n.log.length));
       // Precondition: behind really is behind.
       expect(majorityMaxLen).toBeGreaterThan(behindLen);
 

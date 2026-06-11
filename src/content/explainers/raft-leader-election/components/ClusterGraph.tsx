@@ -1,0 +1,228 @@
+import type { RaftSnapshot, NodeView, LinkView, MessageView, Role } from "../sim/raftSim";
+
+const VIEW_W = 700;
+const VIEW_H = 360;
+const CX = 350;
+const CY = 175;
+const RADIUS = 130;
+const NODE_R = 28;
+
+const NODE_POSITIONS: [number, number][] = [0, 1, 2, 3, 4].map((i) => {
+  const angle = (i * (2 * Math.PI)) / 5 - Math.PI / 2;
+  return [Math.round(CX + RADIUS * Math.cos(angle)), Math.round(CY + RADIUS * Math.sin(angle))];
+});
+
+function roleFill(role: Role): string {
+  switch (role) {
+    case "leader":
+      return "var(--color-entity)";
+    case "candidate":
+      return "var(--color-pending)";
+    case "dead":
+      return "var(--color-dead)";
+    default:
+      return "var(--color-raised)";
+  }
+}
+
+function roleStroke(role: Role): string {
+  switch (role) {
+    case "dead":
+      return "var(--color-dead)";
+    default:
+      return "var(--color-ink)";
+  }
+}
+
+function roleLabelColor(role: Role): string {
+  switch (role) {
+    case "leader":
+    case "candidate":
+      return "var(--color-raised)";
+    default:
+      return "var(--color-ink)";
+  }
+}
+
+function roleGlyph(role: Role): string {
+  switch (role) {
+    case "leader":
+      return "L";
+    case "candidate":
+      return "C";
+    case "dead":
+      return "✕";
+    default:
+      return "F";
+  }
+}
+
+function msgColor(kind: MessageView["kind"]): string {
+  switch (kind) {
+    case "RequestVote":
+      return "var(--color-pending)";
+    case "RequestVoteReply":
+      return "var(--color-ok)";
+    case "AppendEntries":
+    case "AppendEntriesReply":
+      return "var(--color-entity)";
+  }
+}
+
+interface TimerArcProps {
+  cx: number;
+  cy: number;
+  r: number;
+  pct: number;
+}
+
+function TimerArc({ cx, cy, r, pct }: TimerArcProps) {
+  if (pct <= 0) return null;
+  const outerR = r + 5;
+  const startAngle = -Math.PI / 2;
+  const endAngle = startAngle + pct * 2 * Math.PI;
+  const x1 = cx + outerR * Math.cos(startAngle);
+  const y1 = cy + outerR * Math.sin(startAngle);
+  const x2 = cx + outerR * Math.cos(endAngle);
+  const y2 = cy + outerR * Math.sin(endAngle);
+  const largeArc = pct > 0.5 ? 1 : 0;
+  const d = `M ${x1} ${y1} A ${outerR} ${outerR} 0 ${largeArc} 1 ${x2} ${y2}`;
+  return <path d={d} fill="none" stroke="var(--color-pending)" strokeWidth={3} strokeLinecap="round" opacity={0.7} />;
+}
+
+interface NodeCircleProps {
+  node: NodeView;
+  onNodeClick: (id: number) => void;
+}
+
+function NodeCircle({ node, onNodeClick }: NodeCircleProps) {
+  const [nx, ny] = NODE_POSITIONS[node.id];
+  const fill = roleFill(node.role);
+  const stroke = roleStroke(node.role);
+  const labelColor = roleLabelColor(node.role);
+  const glyph = roleGlyph(node.role);
+
+  return (
+    <g
+      onClick={() => onNodeClick(node.id)}
+      style={{ cursor: "pointer" }}
+      role="button"
+      aria-label={`Node ${node.id} (${node.role}) — click to kill or restart`}
+    >
+      {node.role !== "dead" && node.role !== "leader" && <TimerArc cx={nx} cy={ny} r={NODE_R} pct={node.timerPct} />}
+      <circle cx={nx} cy={ny} r={NODE_R + 12} fill="transparent" stroke="none" />
+      <circle
+        cx={nx}
+        cy={ny}
+        r={NODE_R}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={node.role === "follower" ? 2 : 0}
+        opacity={node.role === "dead" ? 0.5 : 1}
+      />
+      <text
+        x={nx}
+        y={ny - 6}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fontSize={15}
+        fontWeight="600"
+        fill={labelColor}
+        fontFamily="var(--font-mono)"
+        opacity={node.role === "dead" ? 0.6 : 1}
+      >
+        {glyph}
+      </text>
+      <text
+        x={nx}
+        y={ny + 10}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fontSize={12}
+        fill={labelColor}
+        fontFamily="var(--font-mono)"
+        opacity={node.role === "dead" ? 0.5 : 1}
+      >
+        n{node.id}
+      </text>
+    </g>
+  );
+}
+
+interface LinkLineProps {
+  link: LinkView;
+  onLinkClick: (a: number, b: number) => void;
+}
+
+function LinkLine({ link, onLinkClick }: LinkLineProps) {
+  const [ax, ay] = NODE_POSITIONS[link.a];
+  const [bx, by] = NODE_POSITIONS[link.b];
+
+  const strokeColor = link.up ? "var(--color-rule)" : "var(--color-dead)";
+  const dashArray = link.up ? undefined : "6,4";
+
+  return (
+    <g
+      onClick={() => onLinkClick(link.a, link.b)}
+      style={{ cursor: "pointer" }}
+      role="button"
+      aria-label={`Link n${link.a}–n${link.b} (${link.up ? "up" : "cut"}) — click to cut or heal`}
+    >
+      <line x1={ax} y1={ay} x2={bx} y2={by} stroke="transparent" strokeWidth={24} />
+      <line
+        x1={ax}
+        y1={ay}
+        x2={bx}
+        y2={by}
+        stroke={strokeColor}
+        strokeWidth={1.5}
+        strokeDasharray={dashArray}
+        opacity={link.up ? 1 : 0.6}
+      />
+    </g>
+  );
+}
+
+interface MessageDotProps {
+  msg: MessageView;
+}
+
+function MessageDot({ msg }: MessageDotProps) {
+  const [ax, ay] = NODE_POSITIONS[msg.from];
+  const [bx, by] = NODE_POSITIONS[msg.to];
+  const t = msg.progress;
+  const x = ax + (bx - ax) * t;
+  const y = ay + (by - ay) * t;
+  const color = msgColor(msg.kind);
+
+  return <circle key={msg.id} cx={x} cy={y} r={5} fill={color} opacity={0.9} />;
+}
+
+interface Props {
+  snap: RaftSnapshot;
+  onNodeClick: (id: number) => void;
+  onLinkClick: (a: number, b: number) => void;
+}
+
+export function ClusterGraph({ snap, onNodeClick, onLinkClick }: Props) {
+  return (
+    <svg
+      viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+      width="100%"
+      aria-label="Raft cluster — 5 nodes in a pentagon. Click a node to kill or restart it. Click a link to cut or heal it."
+      style={{ display: "block" }}
+    >
+      {snap.links.map((link) => (
+        <LinkLine key={`${link.a}-${link.b}`} link={link} onLinkClick={onLinkClick} />
+      ))}
+
+      {snap.messages.map((msg) => (
+        <MessageDot key={msg.id} msg={msg} />
+      ))}
+
+      {snap.nodes.map((node) => (
+        <NodeCircle key={node.id} node={node} onNodeClick={onNodeClick} />
+      ))}
+    </svg>
+  );
+}

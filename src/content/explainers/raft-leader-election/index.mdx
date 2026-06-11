@@ -1,0 +1,41 @@
+---
+title: "Raft leader election, but you control the network"
+description: "Five nodes, one network partition, zero stable leaders until a quorum agrees. Kill nodes, cut links, and watch Raft elect a new leader in real time."
+number: 2
+pubDate: 2026-06-11
+draft: true
+---
+
+import Figure from "../../../components/Figure.astro";
+import RaftViz from "./components/RaftViz";
+
+A distributed system needs someone in charge. Raft solves this with a leader: one node that accepts writes, sequences them, and replicates them to the others. The hard part is what happens when that leader goes silent. How does the cluster agree on a replacement — safely, without two nodes both believing they are in charge at once?
+
+The answer involves election timeouts, term numbers, and a quorum rule. The figure below makes all of it observable.
+
+<Figure
+  number={1}
+  label="raft cluster"
+  caption="Click a node to kill or restart it. Click a link to cut or heal it. Use the preset buttons to trigger partitions."
+>
+  <RaftViz client:visible />
+</Figure>
+
+Each node is a follower until its election timer expires. When that happens it increments its term, declares itself a candidate, and solicits votes from peers. A node that wins a quorum — three of five — becomes leader for that term and immediately starts sending heartbeats to suppress everyone else's timers. If the leader goes quiet (killed, or isolated by a partition), followers time out and a new election begins.
+
+The amber arc around each follower and candidate is its election timer depleting. When it reaches full, an election fires. Leaders show no arc because they never time out — they heartbeat instead.
+
+## What to watch
+
+**Normal operation.** Let the cluster run. One node will win the first election and settle into sending heartbeats. The other nodes' timers keep resetting. The event log shows each heartbeat round as an `AppendEntries` message; committed log entries advance the `commit` counter in the node panel.
+
+**Leader failure.** Click the leader node (marked L) to kill it. The remaining four nodes' timers start advancing; one will time out first, start an election, and — provided it can reach a quorum of the other three — win and become the new leader. Watch the term number increment.
+
+**Partition.** Press **Split 2/3** to divide the cluster into nodes 0–1 (minority) and 2–4 (majority). If the current leader is in the minority partition, it keeps sending heartbeats to 0–1 but can never commit anything — it cannot reach three nodes. Meanwhile 2–4 elect a new leader at a higher term. When you press **Heal all**, the old minority leader receives a heartbeat from the new higher-term leader, sees the higher term, and immediately steps down. No committed entry is lost; the minority leader's uncommitted log entries are overwritten.
+
+**Split brain annotation.** During the window after a partition but before the minority leader steps down, two nodes may simultaneously believe they are leader. The visualization annotates this state explicitly: watch for the amber banner that identifies the stale minority leader and explains why it cannot commit.
+
+## Sources
+
+- Diego Ongaro and John Ousterhout, [In Search of an Understandable Consensus Algorithm (Extended Version)](https://raft.github.io/raft.pdf) — the Raft paper; §5 covers leader election and log replication.
+- [The Raft website](https://raft.github.io/) — animated visualization and links to implementations.
