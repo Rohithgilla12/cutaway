@@ -1,6 +1,6 @@
 ---
 title: "How a write-ahead log survives a crash"
-description: "Kill a database mid-write and watch recovery replay the log, step by step."
+description: "COMMIT returned OK, then the box lost power. Whether that row is still there comes down to one fsync. Kill the database mid-write and watch recovery replay the log."
 number: 1
 pubDate: 2026-06-11
 draft: true
@@ -9,9 +9,96 @@ draft: true
 import Figure from "../../../components/Figure.astro";
 import WalViz from "./components/WalViz";
 
-Placeholder. The WAL sim core (M1) comes before any prose (M2), per the
-interactive-explainer skill's order of operations.
+Your application sent `COMMIT`, the database answered with a success tag, and the framework reported one row written. Three milliseconds later the machine lost power. When it boots back up, is the row there?
 
-<Figure number={1} label="write-ahead log">
+The honest answer is: it depends on what "the database answered" actually meant. There is a window where the client has been told the commit succeeded but the bytes are still in volatile memory. Close that window the wrong way and you either lose acknowledged writes or you torch throughput trying not to. The write-ahead log is the mechanism that decides where the window closes, and it is worth understanding exactly, because the failure modes are the kind that surface at 3am with a customer on the phone.
+
+## The naive approach
+
+Skip the log entirely. A transaction touches some rows, so find the pages those rows live on, modify them in the buffer cache, and write the pages back to their home locations on disk. When `COMMIT` returns, the data is where it belongs. No separate log, no replay, no recovery logic.
+
+You have two knobs for "when do we write the pages back". Either fsync every page at commit time, or fsync nothing and let the OS flush the page cache whenever it feels like it.
+
+Neither knob is in a good position.
+
+## Why it breaks
+
+Fsync-everything is correct and slow. A row that lives on page 4,217 forces a synchronous random write to wherever page 4,217 sits on disk. A commit touching three rows on three pages is three scattered fsyncs. On spinning media that is three seek-and-write cycles; even on an SSD you are paying full durability latency per page, serialized, with no batching. A 5 ms durable write per commit caps a single connection somewhere near 200 commits per second, and the writes are random, which is the access pattern storage hates most.
+
+Fsync-nothing is fast and a lie. `COMMIT` returns the instant the page is dirtied in cache. The OS writes it back eventually. If the process or the box dies before that writeback, the acknowledged commit is gone, and you had no way to know which commits were at risk because the ack told you nothing about durability.
+
+There is a worse failure hiding underneath both. A page is 8 KB; the disk persists in smaller atomic units. If power drops while a page is being written, you can land a page that is half old bytes and half new bytes — a torn page. That is not a lost write, it is a corrupted one, and a corrupted page can take out rows the failed transaction never touched.
+
+So the naive approach forces a choice between slow, lossy, or corrupt. The log exists to refuse that choice.
+
+## The real mechanism
+
+Invert the order. Before touching the home location of any page, append a record describing the change to a log that only ever grows at the end. The log is sequential, so flushing it is one append-and-fsync, not a scatter of random writes. Once that fsync returns, the change is durable — recoverable — even though the actual data pages have not moved. Only then do you acknowledge the commit. The home pages get written back later, lazily, in the background or at a checkpoint.
+
+Three rules fall out of that inversion, and they are the whole idea:
+
+1. **Log first.** The change is described in the WAL before the data page is modified on disk.
+2. **Ack after fsync.** A commit is acknowledged only once its commit record is durable in the log — never before.
+3. **Pages later.** Home pages are flushed asynchronously; a crash that loses them is fine, because the log can redo them.
+
+The figure below is a single WAL writer doing exactly this. The strip is the log, newest records on the right, each block a `begin` (B), `update` (U), or `commit` (C). Green means durable, amber means appended-but-not-yet-fsynced, and the dashed green line is the durable boundary — everything left of it has survived an fsync. The grid underneath is the eight data pages, each showing its in-memory value against its on-disk value; when those disagree, the disk is stale and the log is carrying the difference.
+
+<Figure number={1} label="write-ahead log" caption="Toggle fsync = off, press Commit a few times, then Crash — watch the lost counter climb.">
   <WalViz client:visible />
 </Figure>
+
+Start with the durability lie. Set **fsync = off**, press **Commit** three or four times, and watch the records stay amber: appended, acked, but never fsynced. The `acked` counter goes up; `fsyncCount` does not move. Now press **Crash**. Every amber record is gone and the `lost` counter jumps to match the commits you thought succeeded. That is the fsync-nothing failure made literal: the ack was granted before durability, so the crash takes back writes the client was told had landed.
+
+Now reset and leave **fsync = on**. Press **Commit** and the record turns green almost immediately — `fsyncCount` ticks up in lockstep with `commitCount`, the durable boundary advances past the new commit, and only then is it acked. Crash now and `lost` stays at zero. Same crash, opposite outcome, and the only difference is that the ack waited for the fsync.
+
+The cost of fsync-on is the part that group commit fixes, and you can watch it happen. Turn on **Load** with fsync still on. Load fires roughly 25 commits a second into the log, faster than a 5 ms fsync can drain them one at a time. Watch `fsyncCount` fall behind `commitCount`: the two counters diverge, yet every committed record still goes green. That gap is the point. A single fsync persists the log up to its current write position, so every commit that arrived while one flush was in flight rides that same flush to disk. One fsync, many commits made durable. The log's sequential, append-only shape is what makes that batching free — you are extending one write, not coordinating scattered ones.
+
+That is the trade the WAL buys you: durability per commit at the amortized cost of much less than one fsync per commit, as long as commits arrive faster than the disk drains.
+
+## Failure modes and recovery
+
+A crash is not a clean line. The interesting case is a crash *during* a flush, when the log's tail is half-written.
+
+Press **Crash** while a flush is in flight (easiest with **Load** on, so there is usually one mid-write). The first record of that flush — the lowest-LSN one the fsync was persisting — may turn red. Its bytes reached the platter, so it sits at or under the durable boundary, but it is torn: a partial write with a CRC that no longer matches. Every WAL record carries a CRC-32C checksum, set on write and verified on read, precisely so recovery can tell a complete record from a torn one.
+
+> The sim models the torn write as damaging only the **first** record of the in-flight batch, and CRC as a boolean valid/torn flag rather than a real polynomial. A real torn page can corrupt anywhere inside the partially-written block; the truncation behavior is the same.
+
+Now walk recovery. The system is `crashed`; press **Recover step** once to begin. Recovery does not start from the beginning of time — it starts from the last checkpoint, because everything before the checkpoint is already on the data pages on disk. It resets the in-memory pages to their on-disk (checkpoint) image and replays forward from there.
+
+Keep pressing **Recover step**. Each press replays one record: a `begin` is noted, an `update` reapplies its value to the page (watch the page grid's memory value change as the blue replay cursor moves), a `commit` marks its transaction durable. This is redo, and redo has to be idempotent — applying the same update record twice must land the same value, because recovery cannot know how far the pre-crash flush actually got. Setting a page to a recorded value is naturally idempotent; that is not an accident, it is a design constraint on what a redo record is allowed to say.
+
+When replay reaches the torn record, it stops. A failed CRC means everything from that point on is suspect, so recovery truncates the log there and treats the tail as if it never happened. Transactions whose commit record made it past the fsync show up as `survived`; transactions whose commit was torn or never flushed show up as `lost`. The recovery log spells out the count. Crucially, no `survived` transaction is ever missing and no `lost` transaction is ever half-applied — recovery reconstructs exactly the state of a clean replay up to the last durable, CRC-valid record, which is the invariant the whole scheme exists to guarantee.
+
+A few things the sim simplifies here, all of which a careful reader will notice:
+
+> Recovery replays every committed update after the checkpoint, even pages already flushed past that change. Real engines stamp each page with the LSN of its last applied change and skip records the page has already seen, so redo is cheaper. The result is identical; the sim does the extra work.
+
+> Updates apply to in-memory pages immediately at commit time, and disk pages are written only at checkpoint — there is no background writer evicting dirty pages between checkpoints. A real engine drifts pages to disk continuously.
+
+> Every transaction here commits. There are no aborts and no undo pass, so recovery is redo-only. A real system also has to roll back transactions that were in flight at crash time.
+
+## How Postgres actually does this
+
+The sim is the shape of the mechanism; Postgres is the mechanism with thirty years of hardening on it. A few specifics worth knowing, all checkable against the docs linked below.
+
+**`wal_buffers`** is the shared-memory staging area for WAL records before they are written to disk — the amber zone in the figure. It defaults to `-1`, which auto-tunes to about 1/32 of `shared_buffers`, clamped between 64 KB and one WAL segment (typically 16 MB).
+
+**`synchronous_commit`** is the ack-after-fsync rule, exposed as a knob. At the default `on`, a commit waits for its WAL record to be flushed to durable storage before returning. Set it to `off` and the commit returns without waiting for that flush. Here is the part people get wrong: `synchronous_commit = off` is *not* the fsync-nothing corruption case. The Postgres docs are explicit that, unlike turning off `fsync`, it "does not create any risk of database inconsistency" — a crash can lose recently acknowledged transactions, but the database comes back consistent, as if those transactions had aborted cleanly. The loss window is bounded: at most three times `wal_writer_delay`, which defaults to 200 ms, so under 600 ms of commits at risk. That is a real, bounded data-loss window with no corruption — a very different bet from the naive fsync-nothing footgun in the figure, which loses writes silently and gives you no consistency guarantee at all.
+
+**Group commit** is `commit_delay` and `commit_siblings`. `commit_delay` (microseconds, default 0) tells a committing transaction to pause briefly before flushing, so that other commits in flight can join the same fsync — exactly the counter divergence you watched under Load. `commit_siblings` (default 5) gates that delay so it only kicks in when at least that many transactions are already open, since there is no one to batch with on an idle system.
+
+**`full_page_writes`** (default `on`) is the torn-page defense the sim deliberately omits. After each checkpoint, the first modification of a page writes that page's entire image into the WAL, not the row-level delta. The reason is the torn-page problem from the naive section: if a crash tears an 8 KB data-file page mid-write, the row-level redo record has nothing intact to apply to, so Postgres instead restores the whole page from the WAL copy. The sim's log protects against losing writes but does not model torn pages on the data files themselves, which is what full-page writes exist for.
+
+**`checkpoint_timeout`** (default 5 min) bounds how much WAL recovery has to replay. A checkpoint flushes dirty pages to their home locations and advances the point recovery starts from — the muted checkpoint line in the figure. Press **Checkpoint** and watch the page grid's disk values catch up to memory and the checkpoint marker jump forward; the next crash replays only what came after it.
+
+## When to reach for which
+
+If you can tolerate losing the last few hundred milliseconds of commits on a crash — analytics ingestion, event logs, anything you can replay from an upstream source — `synchronous_commit = off` is a sane, large throughput win with no corruption risk. If a lost acknowledged commit means a double charge, a dropped order, or a regulator's phone call, leave it `on` and let group commit amortize the fsync cost instead. The one position never worth holding is the figure's opening state: acking before the bytes are durable and pretending the window does not exist.
+
+## Sources
+
+- PostgreSQL documentation, [Write-Ahead Logging (WAL)](https://www.postgresql.org/docs/current/wal-intro.html) — the log-first / pages-later model and its rationale.
+- PostgreSQL documentation, [Reliability](https://www.postgresql.org/docs/current/wal-reliability.html) — full-page writes after a checkpoint, torn/partial page writes, and CRC-32C protection of WAL records, verified during crash recovery.
+- PostgreSQL documentation, [Write Ahead Log configuration](https://www.postgresql.org/docs/current/runtime-config-wal.html) — `wal_buffers`, `synchronous_commit` (including the bounded ≤ 3× `wal_writer_delay` loss window and the no-inconsistency guarantee), `wal_writer_delay`, `commit_delay`, `commit_siblings`, `full_page_writes`, `checkpoint_timeout`.
+- Martin Kleppmann, *Designing Data-Intensive Applications*, ch. 3 — write-ahead logs, durability, and the log-structured storage argument.
+- Alex Petrov, *Database Internals*, Part I — recovery, redo/undo, ARIES, and checkpointing.
