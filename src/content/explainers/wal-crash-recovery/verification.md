@@ -256,3 +256,12 @@ Primary sources used:
    `fsync` — is stated correctly and is the exact distinction the Postgres docs draw.
 
 See the prose review notes in the task report for voice/teaching findings.
+
+## Edge-state QA (2026-06-11)
+
+Exercised in a real browser (built site, Playwright): commit/crash/recover-all flow correct (3 survived, 0 lost —
+background flush made fsync-off commits durable before the crash, matching the bounded-window semantics described in
+prose); crash banner + aria-live announce; recovery log renders; controls disable correctly per phase; 360px layout
+wraps with no overlap; zero console errors/warnings. Stepped reduced-motion mode and button-spam safety covered by
+code review + sim invariant tests. Known minor: B/U/C glyphs inside strip blocks render small at 360px; state remains
+legible via color, legend, and HTML caption.
