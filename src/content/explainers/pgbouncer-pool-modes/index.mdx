@@ -1,0 +1,57 @@
+---
+title: "What PgBouncer actually does to your connections"
+description: "Session, transaction, and statement pooling modes explained through a live simulation — including the prepared-statement trap that burns engineers in transaction mode."
+number: 3
+pubDate: 2026-06-11
+draft: true
+---
+
+import Figure from "../../../components/Figure.astro";
+import PoolViz from "./components/PoolViz";
+
+Every production Postgres deployment eventually hits a connection limit. PgBouncer sits in front of your database and multiplexes many application connections onto a smaller pool of real server connections. The operative word is _how_ it multiplexes — and the three modes behave so differently that choosing the wrong one can silently corrupt your application.
+
+The figure below makes the difference observable. Watch the lane diagram: clients are the small squares on the left, server connections are the larger rectangles on the right, and animated dots are queries in flight.
+
+<Figure
+  number={1}
+  label="connection pooler"
+  caption="Change the pool mode, then add clients or raise load to see how each mode handles contention. Enable PREPARE in transaction mode to reproduce the prepared-statement error."
+>
+  <PoolViz client:visible />
+</Figure>
+
+## Session mode
+
+In session mode PgBouncer behaves like a pure connection multiplexer: a client gets one server connection and holds it for the entire session. The server is not released until the client disconnects. This is the safest mode — every SQL feature works, prepared statements live on the right backend, advisory locks are stable — but it provides the least multiplexing. If you have 200 application threads and a pool of 50, at most 50 threads are active at any time and the rest wait.
+
+The simulation shows this as sticky links: most clients stay wired to the same server connection across many transactions. Occasionally a client disconnects (the simulation models this at ~22% of transaction completions) and the freed server runs a brief `DISCARD ALL` reset before becoming available to another client — shown as the amber _reset_ state.
+
+## Transaction mode
+
+Transaction mode releases the server connection back to the pool at every `COMMIT` or `ROLLBACK`. A client holds a server only for the duration of a single transaction, not for the life of the session. This is the source of PgBouncer's real multiplexing power: a pool of 10 can serve 200 clients as long as their transactions are short.
+
+The tradeoff is that the server your next transaction lands on is not necessarily the same server your last one ran on. This breaks anything that lives in a server session across transactions: `SET` variables, advisory locks, temporary tables — and **protocol-level prepared statements**.
+
+## The prepared-statement trap
+
+Enable _PREPARE: on_ while in _transaction_ mode with a small pool. The event log will start showing `prepared statement "S_1" does not exist`. Here is why: the PostgreSQL wire protocol lets clients `PREPARE` a named statement once and then `EXECUTE` it by name on all future queries. The named statement lives in the server's session memory. When PgBouncer routes the client's next transaction to a _different_ server connection that never saw the `PREPARE`, the `EXECUTE` fails.
+
+To reproduce it in exactly four control presses from the default state: **transaction** → **pool_size −** (to 2) → **PREPARE: on** → **load: HIGH**. Errors appear in the event log and the prepared_missing counter climbs.
+
+PgBouncer 1.21+ added `max_prepared_statements` (default 200) which tracks and replays prepared statements transparently, eliminating this failure. The simulation models the pre-1.21 / `max_prepared_statements = 0` path to illustrate the underlying hazard.
+
+## Statement mode
+
+Statement mode releases the server after _every individual statement_, not just at transaction boundaries. This gives the highest multiplexing density but forbids multi-statement transactions entirely — PgBouncer cannot keep a server pinned between statements within a transaction block, so any `BEGIN` / `COMMIT` wrapper around more than one statement produces an error. Use this only with completely stateless, single-statement workloads.
+
+## Queue and timeout
+
+When every server connection in the pool is occupied, new clients join a FIFO wait queue. The amber badge count in the visualization is that queue depth. PgBouncer's `query_wait_timeout` (real default: 120 seconds; scaled to 5 seconds in the simulation) disconnects clients that wait too long. To watch this: set _clients_ to 16, _pool_size_ to 1, and _load: HIGH_. The queue grows, the timeout counter increments, and the event log records each `query_wait_timeout` error.
+
+## Sources
+
+- [PgBouncer documentation — pool modes](https://www.pgbouncer.org/config.html#pool_mode) — authoritative config reference.
+- [PgBouncer FAQ — prepared statements](https://www.pgbouncer.org/faq.html#how-to-use-prepared-statements-with-pgbouncer) — official guidance on the prepared-statement hazard.
+- [PgBouncer 1.21 release notes](https://www.pgbouncer.org/changelog.html) — `max_prepared_statements` introduction.
+- Craig Kerstiens, [Why you need connection pooling in Postgres](https://www.citusdata.com/blog/2017/05/10/scaling-connections-in-postgres/) — context on connection overhead.
