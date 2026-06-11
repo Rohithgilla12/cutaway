@@ -448,6 +448,96 @@ describe("replaySim — event-in-any-state safety (spam)", () => {
   });
 });
 
+describe("replaySim — history-edge nondeterminism window (documented limitation)", () => {
+  // When a crash happens BEFORE the divergent command event was ever written to history,
+  // the injected nondeterminism lands past the history edge and is undetectable: replay
+  // matches everything it can against history, then transitions to live continuation
+  // without ever seeing a mismatch. The workflow completes normally.
+  //
+  // Only when the crash happens AFTER the branch's command event IS recorded does the
+  // mismatch surface. This is a fundamental property of event-sourced replay: divergence
+  // is invisible until the replayed code catches up to a point where history can contradict it.
+
+  it("nondeterminism past the history edge is undetectable (documented limitation): crash before the branch command is recorded → replay completes without a nondeterminism failure", () => {
+    // Crash while chargeCard is still in-flight (before pumpLiveGenerator emits the next
+    // command). At that point, the only command-producing event in history is
+    // ActivityTaskScheduled(chargeCard). The branch (reserveInventory or timer) has not
+    // yet been recorded. Replay matches chargeCard, reads the recorded result from history,
+    // then immediately hits the history edge — the nondeterministic branch runs in live
+    // continuation with no recorded event to contradict it.
+    //
+    // We need a seed where the original run takes the >100 branch so the injected
+    // nondeterminism (replay clock → ≤100) would diverge IF it were detectable.
+    let chosen = -1;
+    for (let seed = 1; seed <= 200 && chosen < 0; seed++) {
+      const probe = createReplaySim(seed);
+      probe.start();
+      // Do NOT step: chargeCard is in-flight (not yet completed).
+      // The in-flight check: after start(), inFlight is set for chargeCard.
+      // We verify the workflow is running and the first activity is in-flight.
+      if (probe.snapshot().status !== "running") continue;
+      // Crash now — chargeCard is still in-flight, branch not yet recorded.
+      probe.crashWorker();
+      // Recover what the server-side recorded amount will be (stored in activities).
+      const snap = probe.snapshot();
+      const chargeAct = snap.activities.find((a) => a.activity === "chargeCard");
+      if (chargeAct && chargeAct.result !== undefined && chargeAct.result > 100) {
+        chosen = seed;
+      }
+    }
+    expect(chosen, "need a seed where chargeCard amount > 100").toBeGreaterThan(0);
+
+    const sim = createReplaySim(chosen);
+    sim.start();
+    // Crash immediately — chargeCard in-flight, no branch command recorded yet.
+    sim.crashWorker();
+    sim.setNondeterminism(true);
+    sim.startReplay();
+    sim.replayAll();
+    const after = sim.snapshot();
+
+    // Nondeterminism is NOT detected: the divergence happened past the history edge.
+    expect(after.status).toBe("completed");
+    expect(after.nondeterminismError).toBeNull();
+    expect(after.comparison.every((c) => c.outcome !== "mismatch")).toBe(true);
+  });
+
+  it("nondeterminism past the history edge is undetectable (documented limitation): crash AFTER reserveInventory/timer is recorded DOES produce failed-nondeterminism", () => {
+    // Paired assertion: the same injected nondeterminism IS detectable when the crash
+    // happens after the branch command event has been written to history. We crash after
+    // chargeCard completes (which immediately emits the next command), so the branch
+    // command event (reserveInventory or timer) is present in history for replay to match.
+    let chosen = -1;
+    for (let seed = 1; seed <= 200 && chosen < 0; seed++) {
+      const probe = createReplaySim(seed);
+      probe.start();
+      probe.step(2000); // chargeCard completes; next command emitted synchronously
+      if (probe.snapshot().status !== "running") continue;
+      const snap = probe.snapshot();
+      const chargeAct = snap.activities.find((a) => a.activity === "chargeCard");
+      // Need amount > 100 so the replay clock (≤100) takes the opposite branch.
+      if (chargeAct && chargeAct.result !== undefined && chargeAct.result > 100) {
+        chosen = seed;
+      }
+    }
+    expect(chosen, "need a seed where chargeCard amount > 100").toBeGreaterThan(0);
+
+    const sim = createReplaySim(chosen);
+    sim.start();
+    sim.step(2000); // chargeCard completes; reserveInventory command now in history
+    sim.crashWorker();
+    sim.setNondeterminism(true);
+    sim.startReplay();
+    sim.replayAll();
+    const after = sim.snapshot();
+
+    // Nondeterminism IS detected: the divergent branch command is behind the history edge.
+    expect(after.status).toBe("failed-nondeterminism");
+    expect(after.nondeterminismError).toBeTruthy();
+    expect(after.comparison.some((c) => c.outcome === "mismatch")).toBe(true);
+  });
+});
+
 describe("replaySim — metadata", () => {
   it("exports a non-empty SIMPLIFICATIONS list", () => {
     expect(Array.isArray(SIMPLIFICATIONS)).toBe(true);

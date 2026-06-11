@@ -123,6 +123,7 @@ export const SIMPLIFICATIONS: readonly string[] = [
   "Nondeterminism is MODELED as a context clock that differs between the original run and replay (a stand-in for a naked time.Now()/rand call in workflow code), not a real wall-clock read.",
   "The server's command/event matching is simplified to comparing the command type (and activity/timer identity) against the next command-producing event in history.",
   "Timer duration (sleep 5s) is symbolic: it fires after one sim-time tick rather than a real 5s, since durable timers are server-side and replay-transparent.",
+  "Nondeterminism is only detectable when a divergent command is matched against an ALREADY-RECORDED event. Divergence that happens PAST the history edge — e.g., a crash before the branch's command event was written — is indistinguishable from normal forward progress and replays 'cleanly' into live continuation. The viz and prose stage the demo so the injected divergence always lands behind the recorded edge.",
 ];
 
 const CHARGE_TIMER_ID = "sleep-5s";
