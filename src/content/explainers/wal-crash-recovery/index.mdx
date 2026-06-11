@@ -6,5 +6,12 @@ pubDate: 2026-06-11
 draft: true
 ---
 
+import Figure from "../../../components/Figure.astro";
+import WalViz from "./components/WalViz";
+
 Placeholder. The WAL sim core (M1) comes before any prose (M2), per the
 interactive-explainer skill's order of operations.
+
+<Figure number={1} label="write-ahead log">
+  <WalViz client:visible />
+</Figure>
