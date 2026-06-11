@@ -1,0 +1,27 @@
+---
+import { getCollection, render } from "astro:content";
+import Layout from "../components/Layout.astro";
+import PostMeta from "../components/PostMeta.astro";
+
+export async function getStaticPaths() {
+  const entries = await getCollection("explainers", ({ data }) => import.meta.env.DEV || !data.draft);
+  return entries.map((entry) => ({ params: { slug: entry.id }, props: { entry } }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+const minutes = Math.max(1, Math.round((entry.body ?? "").replace(/^import\s.+$|<[^>]+>/gm, " ").split(/\s+/).filter(Boolean).length / 200));
+---
+
+<Layout title={`${entry.data.title} — Cutaway`} description={entry.data.description} ogType="article">
+  <article>
+    <header class="mb-10">
+      <PostMeta number={entry.data.number} pubDate={entry.data.pubDate} minutes={minutes} />
+      <h1 class="mt-2 text-2xl font-semibold text-balance">{entry.data.title}</h1>
+      {entry.data.draft && <p class="mt-2 font-mono text-xs text-pending uppercase">draft — dev only</p>}
+    </header>
+    <div class="prose">
+      <Content />
+    </div>
+  </article>
+</Layout>
