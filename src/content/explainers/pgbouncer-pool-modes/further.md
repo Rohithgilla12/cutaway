@@ -21,11 +21,11 @@ The sim models one database, one user, one pool. Real PgBouncer keeps a separate
 
 ## idle-in-transaction and the backend you forgot to release
 
-The sim has no "open transaction sitting idle" state — a client is either running a statement or between transactions. Real transaction-mode pooling pins a backend for the *entire* open transaction, including the time a client sits in `BEGIN` doing nothing (idle-in-transaction). This is a top cause of pool saturation that looks mysterious: a handful of clients holding backends open while not running queries. `idle_in_transaction_session_timeout` (Postgres side) and `idle_transaction_timeout` (PgBouncer side) exist precisely to reap these. A good failure-mode interaction: add an idle-in-transaction client and watch effective pool size shrink without any visible query load.
+The sim has no "open transaction sitting idle" state — a client is either running a statement or between transactions. Real transaction-mode pooling pins a backend for the _entire_ open transaction, including the time a client sits in `BEGIN` doing nothing (idle-in-transaction). This is a top cause of pool saturation that looks mysterious: a handful of clients holding backends open while not running queries. `idle_in_transaction_session_timeout` (Postgres side) and `idle_transaction_timeout` (PgBouncer side) exist precisely to reap these. A good failure-mode interaction: add an idle-in-transaction client and watch effective pool size shrink without any visible query load.
 
 ## query_wait_timeout: disconnect vs the sim's recoverable error
 
-Real PgBouncer *disconnects* the client when `query_wait_timeout` fires; the sim models it as a recoverable error with backoff so the demo keeps flowing rather than losing the client. The real behavior (client sees a dropped connection, must reconnect) interacts with the thundering-reconnect failure from the article's intro — a saturated pool timing out clients can trigger the exact reconnect stampede that saturates it further. That feedback loop is its own explainer.
+Real PgBouncer _disconnects_ the client when `query_wait_timeout` fires; the sim models it as a recoverable error with backoff so the demo keeps flowing rather than losing the client. The real behavior (client sees a dropped connection, must reconnect) interacts with the thundering-reconnect failure from the article's intro — a saturated pool timing out clients can trigger the exact reconnect stampede that saturates it further. That feedback loop is its own explainer.
 
 ## server_reset_query tuning (DISCARD ALL vs DEALLOCATE ALL)
 

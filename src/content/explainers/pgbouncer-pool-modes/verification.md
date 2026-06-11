@@ -9,6 +9,7 @@ Legend: ✅ verified (source + confirming text) · ⚠️ simplification (must b
 checked it IS) · ❌ wrong/unverifiable (fixed or cut).
 
 Primary sources used:
+
 - PgBouncer config: https://www.pgbouncer.org/config.html
 - PgBouncer features (per-mode SQL matrix): https://www.pgbouncer.org/features.html
 - PgBouncer changelog (1.21 prepared-statement support): https://www.pgbouncer.org/changelog.html
@@ -31,7 +32,7 @@ actual sim core (seed `0xc0ffee`) via a throwaway vitest harness; results quoted
    specified TCP/IP port for incoming connections. Whenever it detects a request for a
    connection, it spawns a new backend process." Quote is exact.
 
-2. **"`work_mem` … defaults to 4 MB and is allocated *per sort or hash operation*, not per
+2. **"`work_mem` … defaults to 4 MB and is allocated _per sort or hash operation_, not per
    connection."** + the multiplication quote.
    ✅ runtime-config-resource: "The default value is four megabytes (4MB)." / "a complex query
    might perform several sort and hash operations at the same time … several running sessions
@@ -118,7 +119,7 @@ actual sim core (seed `0xc0ffee`) via a throwaway vitest harness; results quoted
     matches the documented reasoning. Verified.
 
 18. **FD formula: "max_client_conn + max pool_size × databases × users".**
-    ✅ config: "max_client_conn + (max pool_size * total databases * total users)" (per-user
+    ✅ config: "max_client_conn + (max pool_size _ total databases _ total users)" (per-user
     case). Exact match.
 
 ## E. Transaction-mode feature compatibility (features.html Yes/Never matrix)
@@ -169,7 +170,7 @@ actual sim core (seed `0xc0ffee`) via a throwaway vitest harness; results quoted
 
 27. **Prepared-statement coached sequence: "set transaction mode, drop pool_size to 2, turn
     PREPARE: on, and set load: HIGH … the event log starts printing `prepared statement "S_1"
-    does not exist`."**
+does not exist`."**
     ✅ Executed: with mode transaction / clients 8 / pool 2 / load high / prepared on, the event
     log emits `client N: prepared statement "S_1" does not exist` within a few seconds. The exact
     error substring `prepared statement "S_1" does not exist` matches the sim's `failClient`
@@ -193,7 +194,7 @@ actual sim core (seed `0xc0ffee`) via a throwaway vitest harness; results quoted
 30. **Mode-release semantics: session = pin until disconnect + server_reset_query (DISCARD ALL)
     shown as amber "reset" lane; transaction = release per COMMIT, no reset by default.**
     ✅ Matches sim: session-mode finishTransaction keeps the link, disconnect (SESSION_DISCONNECT
-    _CHANCE 0.22) triggers releaseServer(runReset=true) → "reset" state for SERVER_RESET_MS;
+    \_CHANCE 0.22) triggers releaseServer(runReset=true) → "reset" state for SERVER_RESET_MS;
     transaction/statement release with runReset=false. Prose's "~22% of completions" matches the
     constant. LaneDiagram colors server "reset" as `--color-pending` (amber). Consistent.
 
@@ -224,7 +225,7 @@ actual sim core (seed `0xc0ffee`) via a throwaway vitest harness; results quoted
 35. **HikariCP folklore: "The famous 'connections ≈ cores × 2' rule is HikariCP guidance for a
     CPU-bound JDBC pool."**
     ❌→FIXED. HikariCP's own pool-sizing page gives the formula `((core_count * 2) +
-    effective_spindle_count)` and frames the 2× multiplier as accounting for disk/network I/O
+effective_spindle_count)` and frames the 2× multiplier as accounting for disk/network I/O
     BLOCKING — explicitly NOT CPU-bound guidance ("databases experience blocking on disk and
     network I/O … allowing additional connections to utilize CPU while others wait"). Calling it
     "CPU-bound" inverts the source's reasoning. **Corrected**: prose now describes it as a
@@ -262,7 +263,7 @@ actual sim core (seed `0xc0ffee`) via a throwaway vitest harness; results quoted
 2. **HikariCP "CPU-bound" caveat (claim 35).** Draft called the cores×2 rule "HikariCP guidance
    for a CPU-bound JDBC pool." HikariCP's own doc frames the formula as accommodating I/O
    blocking, not CPU-bound work. Rewrote to cite the actual formula `(core_count × 2) +
-   effective_spindle_count` and the I/O-blocking rationale, preserving the (correct) point that it
+effective_spindle_count` and the I/O-blocking rationale, preserving the (correct) point that it
    is not PgBouncer doctrine.
 
 ## Part B — content / teaching review

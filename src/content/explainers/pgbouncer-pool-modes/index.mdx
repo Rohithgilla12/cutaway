@@ -8,6 +8,7 @@ draft: false
 
 import Figure from "../../../components/Figure.astro";
 import PoolViz from "./components/PoolViz";
+import BackendCostViz from "./components/BackendCostViz";
 
 It is 3am and the pager says `FATAL: sorry, too many clients already`. The app has not changed; the traffic has. You deployed more pods to handle the load, each pod opened its own connection pool, and the product of pods times per-pod connections finally crossed `max_connections`. Every new connection past the limit is now rejected, including the ones your healthy pods need to retry. The fix that feels obvious at 3am — raise `max_connections`, restart, go back to bed — is the one that quietly makes the next outage worse.
 
@@ -17,9 +18,9 @@ It makes it worse because a Postgres connection is not cheap the way an HTTP con
 
 Postgres uses a process-per-connection model. The docs are blunt about it: the supervisor "is called postmaster and listens at a specified TCP/IP port for incoming connections. Whenever it detects a request for a connection, it spawns a new backend process." Every client connection is a full OS process, not a thread, not a lightweight handle. That process carries its own memory, its own file descriptors, and its own slot in every per-backend array the server allocates up front.
 
-Then there is `work_mem`, which defaults to 4 MB and is allocated *per sort or hash operation*, not per connection. The docs spell out the multiplication: "a complex query might perform several sort and hash operations at the same time… several running sessions could be doing such operations concurrently. Therefore, the total memory used could be many times the value of `work_mem`." A single connection running a three-way hash join can claim 12 MB; a thousand idle connections that each occasionally do this are a memory bomb you have armed and forgotten about.
+Then there is `work_mem`, which defaults to 4 MB and is allocated _per sort or hash operation_, not per connection. The docs spell out the multiplication: "a complex query might perform several sort and hash operations at the same time… several running sessions could be doing such operations concurrently. Therefore, the total memory used could be many times the value of `work_mem`." A single connection running a three-way hash join can claim 12 MB; a thousand idle connections that each occasionally do this are a memory bomb you have armed and forgotten about.
 
-So the real ceiling is not `max_connections = 100` (that is "typically 100… but might be less if your kernel settings will not support it"). The real ceiling is the point where a few hundred backend processes start costing you more in scheduler time, shared-memory sizing, and `work_mem` spikes than the actual query work is worth. Past that point throughput goes *down* as you add connections.
+So the real ceiling is not `max_connections = 100` (that is "typically 100… but might be less if your kernel settings will not support it"). The real ceiling is the point where a few hundred backend processes start costing you more in scheduler time, shared-memory sizing, and `work_mem` spikes than the actual query work is worth. Past that point throughput goes _down_ as you add connections.
 
 ## The naive approach
 
@@ -35,9 +36,19 @@ Then a traffic spike makes a few hundred of them run a sort at once, each grabbi
 
 The honest conclusion is that the application's connection count and the database's backend count should not be the same number. You want thousands of the former and a few dozen of the latter. Something has to sit between them and multiplex.
 
+The figure below makes the arithmetic concrete. Baseline per-backend memory is an estimate (~5–10 MB per idle postgres process); `work_mem` is the real parameter from `postgresql.conf` and the worst-case column assumes half the backends are active at once, each running two sort or hash operations simultaneously.
+
+<Figure
+  number={2}
+  label="the cost of a backend"
+  caption="Slide to 5,000 connections and watch the bar pass 64 GB RAM — all estimates, with the real parameter name work_mem. The pooled row shows the same 5,000 clients routed through ~625 server connections (8 clients per server conn.), which keeps total memory under 7 GB (est.)."
+>
+  <BackendCostViz client:visible />
+</Figure>
+
 ## The real mechanism
 
-A connection pooler accepts M client connections on one side and maintains N server connections on the other, with N far smaller than M. Clients think they each have a private connection; in reality the pooler hands a client a real backend only when it has work to do, then takes it back. The whole design space is one question: *when* does the pooler take the backend back? PgBouncer's three pool modes are three answers to exactly that, and nothing more.
+A connection pooler accepts M client connections on one side and maintains N server connections on the other, with N far smaller than M. Clients think they each have a private connection; in reality the pooler hands a client a real backend only when it has work to do, then takes it back. The whole design space is one question: _when_ does the pooler take the backend back? PgBouncer's three pool modes are three answers to exactly that, and nothing more.
 
 The figure is a single pooler doing this. Clients are the small squares on the left, server connections are the wide lanes on the right, and a dot travelling a lane is a query in flight. Watch which client a lane is wired to as you change the mode.
 
@@ -49,9 +60,9 @@ The figure is a single pooler doing this. Clients are the small squares on the l
   <PoolViz client:visible />
 </Figure>
 
-**Session mode** releases the backend only when the client disconnects. Leave the figure on its default — session mode — and watch the lanes go sticky: each server pins to one client and stays wired to it across transaction after transaction. This is a pure multiplexer with the multiplexing turned almost all the way down. With 8 clients and a pool of 3, at most 3 clients can be active and the other 5 wait their turn for a whole session, not a whole query. The payoff is that every SQL feature works, because the client keeps the same backend session the entire time. Occasionally a client in the sim disconnects (modeled at ~22% of completions), and the freed server runs its `server_reset_query` — `DISCARD ALL` by default — shown as the amber *reset* lane before it can be reused.
+**Session mode** releases the backend only when the client disconnects. Leave the figure on its default — session mode — and watch the lanes go sticky: each server pins to one client and stays wired to it across transaction after transaction. This is a pure multiplexer with the multiplexing turned almost all the way down. With 8 clients and a pool of 3, at most 3 clients can be active and the other 5 wait their turn for a whole session, not a whole query. The payoff is that every SQL feature works, because the client keeps the same backend session the entire time. Occasionally a client in the sim disconnects (modeled at ~22% of completions), and the freed server runs its `server_reset_query` — `DISCARD ALL` by default — shown as the amber _reset_ lane before it can be reused.
 
-**Transaction mode** releases the backend at every `COMMIT` or `ROLLBACK`. Switch the mode control to *transaction* and the lanes stop being sticky: each transaction grabs whatever server is free, runs, and lets it go, so over a few seconds a single lane serves many different clients. This is where the multiplexing actually lives — a pool of 20 can carry thousands of clients as long as their transactions are short — and it is the mode you almost certainly want. It is also the mode that breaks things, because the backend your next transaction lands on is not the one your last transaction used.
+**Transaction mode** releases the backend at every `COMMIT` or `ROLLBACK`. Switch the mode control to _transaction_ and the lanes stop being sticky: each transaction grabs whatever server is free, runs, and lets it go, so over a few seconds a single lane serves many different clients. This is where the multiplexing actually lives — a pool of 20 can carry thousands of clients as long as their transactions are short — and it is the mode you almost certainly want. It is also the mode that breaks things, because the backend your next transaction lands on is not the one your last transaction used.
 
 **Statement mode** releases the backend after every individual statement. It packs the most clients per backend and forbids multi-statement transactions outright: PgBouncer cannot keep a server pinned across statements, so a `BEGIN … COMMIT` wrapping more than one statement is rejected. The docs put it plainly: "Transactions spanning multiple statements are disallowed in this mode." Use it only for genuinely stateless, single-statement traffic.
 
@@ -63,20 +74,20 @@ Here is the break that catches people. In the figure, set **transaction** mode, 
 prepared statement "S_1" does not exist
 ```
 
-The mechanism is the one place where transaction mode's "different backend each time" leaks through the abstraction. The PostgreSQL wire protocol lets a client `PREPARE` a named statement once and then `EXECUTE` it by name on later queries. That named statement is parser-and-planner state living in *one backend's session*. The client prepares it on whatever server it held at the time; PgBouncer then routes its next transaction to a *different* server that never saw the `PREPARE`; the `EXECUTE` arrives at a backend with no such statement, and Postgres answers that it does not exist. Watch the per-server prepared chips in the figure: `S_1` shows up resident on one lane, and the error fires exactly when a client lands on the other one.
+The mechanism is the one place where transaction mode's "different backend each time" leaks through the abstraction. The PostgreSQL wire protocol lets a client `PREPARE` a named statement once and then `EXECUTE` it by name on later queries. That named statement is parser-and-planner state living in _one backend's session_. The client prepares it on whatever server it held at the time; PgBouncer then routes its next transaction to a _different_ server that never saw the `PREPARE`; the `EXECUTE` arrives at a backend with no such statement, and Postgres answers that it does not exist. Watch the per-server prepared chips in the figure: `S_1` shows up resident on one lane, and the error fires exactly when a client lands on the other one.
 
-This is not prepared statements being incompatible with pooling in principle — it is the *classic, unmitigated* failure. PgBouncer 1.21 added `max_prepared_statements`, default 200, which "tracks protocol-level named prepared statements" and, when a client's statement is not yet on the backend it landed on, "transparently prepares it first." Setting it to 0 disables that and restores the old hazard. The sim deliberately models the `max_prepared_statements = 0` path, because the hazard is the thing worth understanding; the mitigation only makes sense once you have seen what it mitigates. (This is called out in the sim's `SIMPLIFICATIONS`.)
+This is not prepared statements being incompatible with pooling in principle — it is the _classic, unmitigated_ failure. PgBouncer 1.21 added `max_prepared_statements`, default 200, which "tracks protocol-level named prepared statements" and, when a client's statement is not yet on the backend it landed on, "transparently prepares it first." Setting it to 0 disables that and restores the old hazard. The sim deliberately models the `max_prepared_statements = 0` path, because the hazard is the thing worth understanding; the mitigation only makes sense once you have seen what it mitigates. (This is called out in the sim's `SIMPLIFICATIONS`.)
 
 ## What else transaction mode breaks
 
-Prepared statements are the famous casualty, but they are not alone. Anything that lives in a backend's *session* rather than a *transaction* is unsafe the moment the backend can change between transactions. PgBouncer's feature matrix marks each of these "Never" in transaction pooling, against "Yes" in session pooling:
+Prepared statements are the famous casualty, but they are not alone. Anything that lives in a backend's _session_ rather than a _transaction_ is unsafe the moment the backend can change between transactions. PgBouncer's feature matrix marks each of these "Never" in transaction pooling, against "Yes" in session pooling:
 
 - `SET` / `RESET` of session GUCs — your `SET statement_timeout` lands on one backend and the next transaction runs on another without it.
 - `LISTEN` — the listening session is whatever backend you happened to hold; notifications route to a connection you no longer own. (`NOTIFY` is the one exception the matrix marks "Yes" in transaction mode, since a notification fires and completes within the sending transaction rather than outliving it; it is `LISTEN` that needs a durable session.)
 - Session-level advisory locks — `pg_advisory_lock` taken in one transaction is held by a backend your next transaction may not be using, so you cannot reliably unlock it.
 - `WITH HOLD` cursors, `PRESERVE ROWS` temp tables, `LOAD` — all session-scoped, all gone.
 
-The unifying rule: in transaction mode, anything you set up expecting to read it back in a *later* transaction is rolling the dice on which backend you get. Transaction-scoped advisory locks (`pg_advisory_xact_lock`) are fine, because they are released at `COMMIT` — the same boundary at which the backend is released. That is the tell for what survives.
+The unifying rule: in transaction mode, anything you set up expecting to read it back in a _later_ transaction is rolling the dice on which backend you get. Transaction-scoped advisory locks (`pg_advisory_xact_lock`) are fine, because they are released at `COMMIT` — the same boundary at which the backend is released. That is the tell for what survives.
 
 One related detail: in session mode every release runs `server_reset_query` (`DISCARD ALL`) to wipe leftover session state. In transaction mode it does not, by default — `server_reset_query_always` defaults to `0`, and the docs explain the reset "is not used, because in that mode, clients must not use any session-based features." The reset is a session-mode safety net; transaction mode assumes you never needed it.
 
@@ -86,13 +97,13 @@ The other way to break a pooler has nothing to do with sessions. Reset the figur
 
 That timeout is `query_wait_timeout`, whose real default is **120 seconds**. The sim scales it down to 5 seconds so a saturated pool produces visible timeouts inside a short demo; the behavior is the same, only faster. In production, 120 seconds is a long time to hold a client hostage waiting for a backend, and a saturated pool that hits it is telling you the pool is too small for the offered load — or that something is holding backends far longer than it should (a long transaction, an idle-in-transaction client, a missing index turning a 2 ms query into a 2 s one).
 
-The shape of the failure is the lesson: saturation does not reject connections the way `max_connections` did. It *queues* them, which looks like latency, not errors, right up until the timeout converts the latency into errors all at once. A pooler trades a hard connection ceiling for a soft latency one, and you have to watch the queue depth to see it coming.
+The shape of the failure is the lesson: saturation does not reject connections the way `max_connections` did. It _queues_ them, which looks like latency, not errors, right up until the timeout converts the latency into errors all at once. A pooler trades a hard connection ceiling for a soft latency one, and you have to watch the queue depth to see it coming.
 
 ## Real-world grounding
 
-The numbers you actually configure: `max_client_conn` defaults to **100** (the M side — total clients PgBouncer will accept), `default_pool_size` defaults to **20** (the N side — server connections per database/user pair), `query_wait_timeout` to **120 s**, `max_prepared_statements` to **200**, and `server_reset_query` to `DISCARD ALL`. Note the per-pool subtlety the sim flattens: PgBouncer keeps a separate server pool per `(database, user)` pair, so `default_pool_size` is *per pool*, not global.
+The numbers you actually configure: `max_client_conn` defaults to **100** (the M side — total clients PgBouncer will accept), `default_pool_size` defaults to **20** (the N side — server connections per database/user pair), `query_wait_timeout` to **120 s**, `max_prepared_statements` to **200**, and `server_reset_query` to `DISCARD ALL`. Note the per-pool subtlety the sim flattens: PgBouncer keeps a separate server pool per `(database, user)` pair, so `default_pool_size` is _per pool_, not global.
 
-On sizing the pool, be careful what folklore you import. The famous "connections ≈ cores × 2" rule is a rounding of *HikariCP*'s JDBC sizing formula — `(core_count × 2) + effective_spindle_count`, which exists precisely because disk and network I/O block, letting extra connections use the CPU while others wait — not PgBouncer doctrine, and repeating it as gospel for a pooler is a category error. PgBouncer's own documentation does not hand you a single number; it gives you the file-descriptor accounting (`max_client_conn + max pool_size × databases × users`) and leaves the pool size to your workload. The honest starting point is small — tens, not hundreds — because the entire premise is that N stays far below the backend count where Postgres degrades, and you grow it only if the wait queue says you must.
+On sizing the pool, be careful what folklore you import. The famous "connections ≈ cores × 2" rule is a rounding of _HikariCP_'s JDBC sizing formula — `(core_count × 2) + effective_spindle_count`, which exists precisely because disk and network I/O block, letting extra connections use the CPU while others wait — not PgBouncer doctrine, and repeating it as gospel for a pooler is a category error. PgBouncer's own documentation does not hand you a single number; it gives you the file-descriptor accounting (`max_client_conn + max pool_size × databases × users`) and leaves the pool size to your workload. The honest starting point is small — tens, not hundreds — because the entire premise is that N stays far below the backend count where Postgres degrades, and you grow it only if the wait queue says you must.
 
 PgBouncer is not the only tool in this shape. Other poolers — pgcat, Odyssey, RDS Proxy, Supavisor — make different tradeoffs around multithreading, load balancing, and managed operation; one line each is in `further.md` so this piece stays about modes, not vendors.
 
