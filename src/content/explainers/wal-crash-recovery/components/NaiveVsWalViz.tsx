@@ -268,7 +268,7 @@ export default function NaiveVsWalViz() {
           label="WAL"
           sublabel="1 batched fsync/window"
           lane={snap.wal}
-          colorVar="var(--color-ok, #22c55e)"
+          colorVar="var(--color-ok)"
           isNaive={false}
         />
       </div>
@@ -333,7 +333,7 @@ export default function NaiveVsWalViz() {
         <Legend
           items={[
             { color: "var(--color-danger)", glyph: "▬", label: "naive — queue / rate bar" },
-            { color: "var(--color-ok, #22c55e)", glyph: "▬", label: "WAL — queue / rate bar" },
+            { color: "var(--color-ok)", glyph: "▬", label: "WAL — queue / rate bar" },
             { color: "var(--color-danger)", glyph: "■", label: "naive queue overflow (≥50 queued)" },
           ]}
         />
