@@ -758,8 +758,8 @@ export function createPoolSim(seed: number): PoolSim {
 
 export const SIMPLIFICATIONS: readonly string[] = [
   "One database, one user, one pool. Real PgBouncer keeps a separate server pool per (database, user) pair.",
-  "query_wait_timeout is scaled to 5s (real default 120s) so a saturated pool produces timeouts inside a short demo.",
-  "Prepared statements model the CLASSIC failure: a protocol-level PREPARE lives only on the server that ran it, so transaction-mode reuse on a different backend raises 'prepared statement \"S_n\" does not exist'. PgBouncer >= 1.21 can track and replay prepared statements via max_prepared_statements, which removes this failure; we do not model that path.",
+  "query_wait_timeout is scaled to 5s (real default 120s) so a saturated pool produces timeouts inside a short demo. Real PgBouncer DISCONNECTS the client on query_wait_timeout; the sim models it as a recoverable error with backoff so the demo keeps flowing rather than losing the client entirely.",
+  "Prepared statements model the CLASSIC failure: a protocol-level PREPARE lives only on the server that ran it, so transaction-mode reuse on a different backend raises 'prepared statement \"S_n\" does not exist'. This failure requires max_prepared_statements = 0 (disabled) or PgBouncer < 1.21; from 1.21 onward PgBouncer tracks and replays prepared statements with a default of max_prepared_statements = 200, which removes this failure. The sim models the disabled/pre-1.21 path to illustrate the underlying hazard.",
   "server_reset_query (DISCARD ALL) is modeled as a brief busy window on session-mode release only. Real PgBouncer skips the reset query in transaction mode by default (server_reset_query_always = 0).",
   "A mode change takes effect for new assignments immediately while in-flight links drain under the old mode's rules. Real PgBouncer applies pool_mode changes per pool and expects the pool to drain across a RELOAD rather than switching mid-transaction.",
   "Query durations are a uniform 100-400 sim-ms with no tail latency; real query time is heavy-tailed.",

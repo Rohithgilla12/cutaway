@@ -285,8 +285,10 @@ describe("5. prepared-statement failure mechanics", () => {
       }
       if (hit) seedsWithError++;
     }
-    // The classic failure should appear for the large majority of seeds.
-    expect(seedsWithError).toBeGreaterThanOrEqual(15);
+    // Deterministically 20/20 seeds hit the failure at the 400-step horizon; exact
+    // value is stable because all RNG paths are seeded and the workload is highly
+    // saturated (8 clients, 2 servers, high load, prepared on).
+    expect(seedsWithError).toBe(20);
   });
 
   it("session mode with the same workload NEVER raises prepared_missing", () => {
