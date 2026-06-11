@@ -7,10 +7,12 @@ const entries = (await getCollection("explainers", ({ data }) => import.meta.env
   (a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf(),
 );
 
-const minutesFor = (body: string | undefined) => Math.max(1, Math.round((body ?? "").split(/\s+/).length / 200));
+const minutesFor = (body: string | undefined) =>
+  Math.max(1, Math.round((body ?? "").replace(/^import\s.+$|<[^>]+>/gm, " ").split(/\s+/).filter(Boolean).length / 200));
 ---
 
 <Layout title="Cutaway" description="Interactive explainers of backend and systems internals — the casing removed.">
+  <h1 class="sr-only">Cutaway — interactive explainers of systems internals</h1>
   <p class="prose mb-12 text-muted">
     Interactive explainers of backend and systems internals — WALs, Raft, connection pooling, workflow engines — with
     the casing removed. Built for engineers who have been paged at 3 AM.
