@@ -62,11 +62,7 @@ type Op =
   | { t: "compact" }
   | { t: "get"; key: string };
 
-function makeSchedule(
-  seed: number,
-  n: number,
-  opts: { autoFlush?: boolean; autoCompact?: boolean } = {},
-): Op[] {
+function makeSchedule(seed: number, n: number, opts: { autoFlush?: boolean; autoCompact?: boolean } = {}): Op[] {
   const r = lcg(seed);
   const ops: Op[] = [];
   for (let i = 0; i < n; i++) {
@@ -540,9 +536,7 @@ describe("model constants and metadata", () => {
   it("exports a non-empty SIMPLIFICATIONS list mentioning WAL and bloom filters", () => {
     expect(Array.isArray(SIMPLIFICATIONS)).toBe(true);
     expect(SIMPLIFICATIONS.length).toBeGreaterThan(3);
-    expect(SIMPLIFICATIONS.every((s) => typeof s === "string" && s.length > 0)).toBe(
-      true,
-    );
+    expect(SIMPLIFICATIONS.every((s) => typeof s === "string" && s.length > 0)).toBe(true);
     expect(SIMPLIFICATIONS.some((s) => /WAL/i.test(s))).toBe(true);
     expect(SIMPLIFICATIONS.some((s) => /bloom/i.test(s))).toBe(true);
   });

@@ -1,0 +1,50 @@
+---
+title: "LSM trees: write fast now, pay later"
+description: "Every write lands in memory first, then trickles to disk in sorted runs. Read what you traded away."
+number: 5
+pubDate: 2026-06-11
+draft: true
+---
+
+import Figure from "../../../components/Figure.astro";
+import LsmViz from "./components/LsmViz";
+
+You press insert. The database says OK before a single byte has touched disk. That is not a bug — it is the deal Log-Structured Merge-trees make with you. Writes are fast because they are cheap: append to a sorted in-memory buffer, drain it to a sequential file when full, and let a background job merge the files into a tidy sorted run. The cost is deferred. Reads pay it.
+
+## The structure
+
+An LSM tree keeps data in three places at once.
+
+The **memtable** is an in-memory sorted map. Every write lands here first — a put adds a key/value pair, a delete adds a tombstone. Writes cost a hash lookup and a pointer swap. No disk, no seek.
+
+When the memtable fills past a threshold, it is flushed to disk as an immutable **SSTable** at level 0. L0 files are sorted internally, but their key ranges can overlap each other freely. The newest file wins on a key conflict.
+
+Eventually a background **compaction** job picks up the L0 files, merges them with the sorted **L1** files (whose ranges do not overlap), drops superseded versions and tombstones, and writes new L1 files. Writes are amplified — the same bytes travel memtable → L0 → L1 — but reads shrink: after compaction, one L1 file spans each key range.
+
+## The read cost
+
+A point read starts at the top and works down. Memtable first, then L0 newest to oldest (every file, since ranges overlap), then the one L1 file whose range covers the key. **Read amplification** counts how many structures you touched.
+
+When L0 is empty, a read touches one or two structures. When L0 has four overlapping files, a missed key touches all of them before reaching L1. That is the debt that accumulates while auto-compact is off.
+
+<Figure
+  number={1}
+  label="lsm tree"
+  caption="Turn on auto-write + auto-flush, leave auto-compact off, and watch readAmp climb as L0 piles up. Then press Compact once."
+>
+  <LsmViz client:visible />
+</Figure>
+
+Press **Write** a few times and watch the memtable fill (the partially-shaded bar at the top). Press **Flush** to drain it into an L0 SSTable. The bar lengthens according to the file's key range. Press **Read** — the probe trace in the read-path panel shows exactly which structures were touched and where the search stopped.
+
+Now turn on **auto-write** and **auto-flush** but leave **auto-compact** off. L0 grows. Each Read press extends the trace list and the readAmp last counter climbs. When it reaches four or more, the "compaction pressure" badge appears. This is the debt: the write path cost nothing, but reads are paying interest on every accumulated file.
+
+Press **Compact**. All L0 files merge with L1. The read you take immediately after will touch one or two structures instead of five or six — that drop is the whole point of compaction.
+
+## What the amplification numbers mean
+
+**Write amplification** counts bytes written to all levels divided by bytes the user intended to write. Flushing to L0 doubles this; compacting into L1 adds more. Real engines with seven levels see write amplification of 10–30×.
+
+**Space amplification** counts bytes on disk divided by bytes the live unique-key data would occupy with no redundancy. Overlapping L0 files and uncompacted tombstones both inflate it. Compaction cleans tombstones and duplicate versions, shrinking space amplification back toward 1.
+
+**Read amplification** shrinks after compaction and grows as L0 refills. It is the most visceral trade-off to see live: write cheap, read expensive until the background catches up.

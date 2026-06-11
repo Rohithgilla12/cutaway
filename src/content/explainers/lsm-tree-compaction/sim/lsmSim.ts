@@ -153,12 +153,7 @@ function maxKeyOf(t: SSTable): string | null {
 
 // Two L1 tables overlap if their inclusive key ranges intersect. Used both to find
 // the L1 file a read or compaction must touch and to assert L1 disjointness.
-function rangesOverlap(
-  aMin: string,
-  aMax: string,
-  bMin: string,
-  bMax: string,
-): boolean {
+function rangesOverlap(aMin: string, aMax: string, bMin: string, bMax: string): boolean {
   return aMin <= bMax && bMin <= aMax;
 }
 
@@ -242,9 +237,7 @@ export function createLsmSim(seed: number): LsmSim {
   // existing L0 are allowed — that is the defining L0 property). Memtable clears.
   function doFlush(): void {
     if (memtable.size === 0) return;
-    const entries = [...memtable.values()].sort((a, b) =>
-      a.key < b.key ? -1 : a.key > b.key ? 1 : 0,
-    );
+    const entries = [...memtable.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     const table: SSTable = {
       id: nextTableId++,
       level: 0,
@@ -372,10 +365,7 @@ export function createLsmSim(seed: number): LsmSim {
   // overlapping L1 file. Stop at the first structure that holds the key (value or
   // tombstone). readAmplification == number of structures probed.
   function doGet(keyOrRandom?: string): ReadPath {
-    const key =
-      keyOrRandom !== undefined
-        ? keyOrRandom
-        : keyName(Math.floor(rng() * KEY_COUNT));
+    const key = keyOrRandom !== undefined ? keyOrRandom : keyName(Math.floor(rng() * KEY_COUNT));
 
     const probes: ProbeView[] = [];
     let outcome: ReadOutcome = "absent";
@@ -513,17 +503,12 @@ export function createLsmSim(seed: number): LsmSim {
   // would occupy with no duplicate or obsolete versions. Resolve the live view
   // top-down (memtable wins, then newer L0, then L1) to count unique live keys.
   function spaceAmp(): number {
-    const onDiskBytes =
-      l0.reduce((s, t) => s + tableSize(t), 0) +
-      l1.reduce((s, t) => s + tableSize(t), 0);
+    const onDiskBytes = l0.reduce((s, t) => s + tableSize(t), 0) + l1.reduce((s, t) => s + tableSize(t), 0);
     if (onDiskBytes === 0) return 1;
 
     const resolved = new Map<string, Entry>();
     // L1 oldest first, then L0 oldest -> newest so newer overwrites older.
-    const ordered = [
-      ...l1.slice().sort((a, b) => a.seq - b.seq),
-      ...l0.slice().sort((a, b) => a.seq - b.seq),
-    ];
+    const ordered = [...l1.slice().sort((a, b) => a.seq - b.seq), ...l0.slice().sort((a, b) => a.seq - b.seq)];
     for (const t of ordered) {
       for (const e of t.entries) resolved.set(e.key, e);
     }
@@ -572,8 +557,7 @@ export function createLsmSim(seed: number): LsmSim {
             probes: lastReadPath.probes.map((p) => ({ ...p })),
           }
         : null,
-      writeAmplification:
-        userBytesWritten === 0 ? 1 : totalBytesWritten / userBytesWritten,
+      writeAmplification: userBytesWritten === 0 ? 1 : totalBytesWritten / userBytesWritten,
       readAmplificationLast: readAmpLast,
       readAmplificationAvg: readCount === 0 ? 0 : readAmpSum / readCount,
       spaceAmplification: spaceAmp(),
