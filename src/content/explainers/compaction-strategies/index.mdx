@@ -1,0 +1,85 @@
+---
+title: "Compaction strategies, or: choose your amplification"
+description: "An LSM tree defers work; the compaction strategy decides who pays it back. Run one engine on a fixed disk budget, flip it between leveled and tiered mid-flight, and find the ingest rate where writes stall outright — then watch the other strategy survive the same load by hoarding disk instead."
+number: 7
+pubDate: 2026-06-12
+draft: true
+---
+
+import Figure from "../../../components/Figure.astro";
+import CompactionViz from "./components/CompactionViz";
+import RaceViz from "./components/RaceViz";
+
+The ingest pipeline has been fine for six months, and then one Tuesday p99 write latency jumps from two milliseconds to eight hundred. Nothing deployed. The disk is healthy. In the storage engine's LOG file you find the line that explains the cliff: _Stalling writes because we have 20 level-0 files_. The engine you chose for its cheap writes has stopped accepting them — on purpose, by policy, at a threshold someone picked for you.
+
+[Explainer #5](/lsm-tree-compaction/) ended on the question this piece answers. An LSM tree makes writes cheap by deferring the cost of order to a background merge process, and the three amplifications — write, read, space — are three views of that unpaid debt. What it left open is the knob: _when_ the background merges, and into _what shape_, is a policy called the compaction strategy, and the strategy decides which of the three amplifications eats your headroom. There is no setting where nobody pays.
+
+## The naive approach
+
+Treat compaction as housekeeping and run it eagerly. Merge small runs into big sorted ones the moment they appear, keep the tree perfectly tidy, and reads stay fast forever. This is roughly what leveled compaction does, and for plenty of workloads it is the right call — it is RocksDB's default.
+
+The catch is that compaction is not free housekeeping; it is disk writes, and the disk does not distinguish them from your writes. Every byte the merger rewrites is a byte of write bandwidth your ingest cannot use. Tidiness has a price measured in write amplification, and you pay it from the same budget that absorbs your workload.
+
+## Why it breaks
+
+Run the numbers on a leveled tree. Each level holds roughly ten times the one above it, and pushing data down one level means rewriting it merged with the level below — so a byte that descends the whole tree gets rewritten on the order of ten times _per level_ in the worst case. Total write amplification in the tens is normal for leveled compaction. Your disk writes thirty bytes for every byte you ingest, and when ingest approaches budget ÷ amplification, compaction falls behind, unmerged runs pile up at L0, and the engine pulls the emergency brake: it throttles writers, then stops them. That is the 800 ms p99 — not a failure, a designed back-pressure mechanism doing exactly what it was configured to do.
+
+The alternative is to merge less. Let runs of similar size accumulate and merge them only when enough pile up — tiered compaction (RocksDB calls it universal; Cassandra, size-tiered). Each byte gets rewritten roughly once per tier instead of ratio-times per level, so write amplification drops to single digits. The bill moves: more runs exist at any moment, so reads probe more of them, and superseded versions sit unmerged far longer, so the same logical data occupies multiples of its size on disk.
+
+## One engine, two policies
+
+The figure runs one LSM engine on a fixed disk budget of 24 entries/s, shared by memtable flushes and compaction, flushes first. The strategy toggle switches the merge policy live; the three meters are the three amplifications; the ingest slider is your workload. Sorted-run bars are sized by entry count, and amber marks runs being consumed by the in-flight merge.
+
+<Figure
+  number={1}
+  label="compaction strategies"
+  caption="Four experiments: watch leveled at 6/s hold one run per level; flip to tiered and watch writeAmp fall while runs and spaceAmp grow; drag ingest to 16/s under leveled and meet the write stall; then Full compact and watch disk usage spike before it collapses."
+>
+  <CompactionViz client:visible />
+</Figure>
+
+Start on **leveled** at the default 6/s and let it run. The shape to notice: L0 collects flushed runs until four pile up, then everything merges downward and L1 through L3 hold _one run each_. That single-run-per-level invariant is the whole strategy — a read needs at most one probe per level below L0, and dead versions die at the next merge. The price is on the writeAmp meter: it settles around 4 here, because the same entries keep getting rewritten into L1, then L2, then L3. (Real leveled trees run a 10× ratio over seven levels; ours is 4× over four so you can see every run. The shape survives the scaling; the constants do not.)
+
+Now flip to **tiered** and watch the same workload reshape the tree. Merges happen only when a tier accumulates four similar runs, so runs linger — the sorted-run count climbs, and readAmp with it, since a point read must check every run that might hold the key. Watch spaceAmp drift upward too: the same key's old versions now sit in several runs awaiting a merge that is in no hurry. WriteAmp, meanwhile, drops toward 3 — each entry is rewritten once per tier promotion and that is all. Same data, same budget, same disk: the cost moved from the write path to the read path and the disk footprint.
+
+Then break it. Back on **leveled**, drag ingest to 16/s and watch the failure arrive in stages: flushes eat most of the 24/s budget, the L0-to-L1 merge can't keep pace, L0 runs accumulate past the merge trigger toward the red line — and at 8 runs the engine **stalls writes**. The stalled-writes counter starts counting your refused workload. This is the LOG line from the intro, scaled down: the stop trigger here is 8 runs where RocksDB's default is 36 files, and our stall drops writes onto a counter where the real engine blocks them into a latency spike instead — same mechanism, gentler rendering. Flip to tiered _during_ the stall and watch it drain: tiered's merges are smaller (a tier merges only itself, never dragging the level below in), so the backlog clears and ingest resumes — while spaceAmp quietly climbs past 3× and the run count grows. You did not eliminate the overload; you changed its currency.
+
+Finally, press **Full compact**. Every run merges into one, and the on-disk meter does something worth staring at: it _rises_ before it falls, because the merge holds all its inputs plus the partially-written output until it completes. A full merge of a tree with little garbage needs transient space approaching twice your data — which is why universal compaction's documentation warns you to provision for it, and why "compact everything, then" is not a free answer to space amplification either.
+
+## The trade has a name
+
+What you watched is general, not an artifact of one engine. Any structure that supports reads, updates, and bounded space pays overheads in all three — **read amplification, update (write) amplification, and memory/space amplification** — and the RUM conjecture's claim is that you can drive any two down only by letting the third grow. Leveled compaction picks low read and space and pays in writes; tiered picks low writes and pays in reads and space; an in-place B-tree picks low read and space amplification and pays with random-write update cost, which is the corner the LSM family left in the first place.
+
+<Figure
+  number={2}
+  label="head-to-head"
+  caption="Two engines, identical seeded workload, one slider. At 10/s the meters separate cleanly: leveled stalls first and tiered hoards disk. Drag the rate up and down and watch which counter moves for which engine."
+>
+  <RaceViz client:visible />
+</Figure>
+
+The race makes the trade legible as a dashboard. At the default 10/s: leveled shows higher writeAmp and starts stalling first; tiered shows more sorted runs, higher spaceAmp, and keeps accepting writes longer. Push the slider to 20/s and both eventually stall — flush demand alone saturates the budget, and no merge policy can save a disk that cannot absorb the raw ingest. Strategy chooses where the pain lands; it cannot make the pain exceed the hardware.
+
+## What the real engines do
+
+In **RocksDB**, leveled is the default. The L0 numbers in this sim are scaled-down versions of real knobs: compaction triggers at `level0_file_num_compaction_trigger = 4` files, writes are throttled at `level0_slowdown_writes_trigger = 20`, and stopped outright at `level0_stop_writes_trigger = 36` — the stall is documented, configurable behavior, with siblings keyed on memtable count and pending-compaction bytes. Universal compaction is the tiered alternative (`kCompactionStyleUniversal`), aimed at write-heavy workloads; its documentation states the space cost plainly — full compaction temporarily doubles disk usage, and the strategy bounds space amplification with an explicit `max_size_amplification_percent` knob, default 200.
+
+In **Cassandra**, the same fork appears per-table: `SizeTieredCompactionStrategy` is the default and merges SSTables when `min_threshold = 4` similar-sized ones accumulate — the trigger this sim borrows. `LeveledCompactionStrategy` is the documented choice for read-heavy and update-heavy tables — the write-amplification bill it runs up is the same one priced above. There is also `TimeWindowCompactionStrategy` for time-series, which sidesteps the trade by never merging across time windows — a reminder that if your data has structure, you can sometimes refuse the RUM bill rather than choose a corner of it.
+
+The sim's other simplifications are in its `SIMPLIFICATIONS` list, the load-bearing ones being: one compaction job at a time (real engines parallelize), no bloom filters (so readAmp equals run count along the probe path, the quantity the strategy actually controls — production reads sit far below it), and a stall that drops writes onto a counter instead of blocking the caller.
+
+## Choosing
+
+Estimate two numbers before picking a strategy: ingest bytes/s × expected write amplification versus your disk's sustained write bandwidth, and live data × expected space amplification versus your disk's capacity. Leveled fails the first check on write-heavy workloads; tiered fails the second on space-tight ones. Read-heavy and latency-sensitive: leveled, and let the write path pay. Ingest-heavy, append-mostly, or flash whose endurance you are budgeting: tiered, and provision the disk headroom — including the transient doubling. Time-series with TTL: a time-windowed strategy refuses the trade entirely.
+
+And whichever you choose, alarm on the engine's own debt gauges — L0 file count and pending compaction bytes — before the stop trigger does it for you, at 2 a.m., in the LOG.
+
+## Sources
+
+- RocksDB wiki, [Leveled Compaction](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction) — one sorted run per level below L0, compaction cascades downward, L0→L1 takes all L0 files.
+- RocksDB wiki, [Universal Compaction](https://github.com/facebook/rocksdb/wiki/Universal-Compaction) — tiered merging of similar-sized runs, lower write amplification at higher read/space amplification, transient space doubling during full compaction, `max_size_amplification_percent` default 200.
+- RocksDB wiki, [Write Stalls](https://github.com/facebook/rocksdb/wiki/Write-Stalls) — slowdown/stop behavior keyed on L0 file count, memtable count, and pending compaction bytes.
+- RocksDB source, [`include/rocksdb/advanced_options.h`](https://github.com/facebook/rocksdb/blob/main/include/rocksdb/advanced_options.h) — `level0_file_num_compaction_trigger` 4, `level0_slowdown_writes_trigger` 20, `level0_stop_writes_trigger` 36, `max_bytes_for_level_multiplier` 10.
+- Apache Cassandra docs, [Compaction](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/overview.html) — STCS default with `min_threshold` 4, LCS for read-heavy tables, TWCS for time-series.
+- Manos Athanassoulis et al., [The RUM Conjecture](https://cs-people.bu.edu/mathan/publications/edbt16-athanassoulis.pdf) (EDBT 2016) — read/update/memory overheads, optimizing two at the expense of the third.
+- Martin Kleppmann, _Designing Data-Intensive Applications_, ch. 3; Alex Petrov, _Database Internals_, Part I — LSM maintenance, leveled vs size-tiered compaction.
