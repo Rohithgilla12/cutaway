@@ -1,0 +1,103 @@
+---
+title: "MVCC, or: why your table is 3× bigger than your data"
+description: "Postgres never updates a row in place — every UPDATE buries the old version in the heap and trusts vacuum to sweep up later. Hold one transaction open and watch vacuum keep running while reclaiming nothing, until the table is mostly corpses and the disk alert fires."
+number: 6
+pubDate: 2026-06-12
+draft: true
+---
+
+import Figure from "../../../components/Figure.astro";
+import MvccViz from "./components/MvccViz";
+import VisibilityViz from "./components/VisibilityViz";
+
+The disk alert fires on a Tuesday. A table that holds maybe nine gigabytes of live rows is taking up thirty on disk, `pg_stat_user_tables` reports two hundred million dead tuples, and autovacuum — which has been running the whole time, you check — is logging the same line over and over: _dead but not yet removable_. The culprit turns out to be a `psql` session in someone's tmux, sitting `idle in transaction` since before lunch.
+
+Nothing is broken. Every component is doing exactly what it is designed to do, and the design is the interesting part. Postgres never updates a row in place: every UPDATE writes a complete new copy of the row and leaves the old one lying in the table, and a deleted row is not removed at all, only marked. The table is an accumulation of row versions, most of them dead, and a background process is in a permanent race to shovel them out. This piece is about what creates those versions, what is allowed to remove them, and how one idle connection can quietly win the race against the shovel.
+
+## The naive approach
+
+Update in place and make readers wait. If a writer overwrites a row while a reader is mid-scan, the reader sees half an update, so you guard rows with locks: writers take exclusive locks, readers take shared locks, and the lock manager serializes them. This is textbook two-phase locking, and plenty of systems have shipped it.
+
+The cost is that readers and writers now queue behind each other. A reporting query that scans the table for ten minutes holds read locks that block every UPDATE in its path; a batch update blocks every reader behind it. For a database that wants OLTP writes and analytical reads on the same data, lock-based isolation turns one workload into the other's outage.
+
+## Versions instead of locks
+
+Multi-version concurrency control takes the other branch: never destroy data a running transaction might still need to see. A writer does not overwrite the row a reader is looking at — it creates a _new version_ of the row, and the reader keeps using the old one. Readers never block writers, writers never block readers, and the price is paid in space: old versions pile up in the table until something decides nobody can see them anymore and reclaims them.
+
+In Postgres, the bookkeeping lives in two hidden columns on every row version. **`xmin`** is the ID of the transaction that created the version; **`xmax`** is the ID of the transaction that invalidated it — zero while the version is current, set by the UPDATE or DELETE that superseded it. An UPDATE is physically an INSERT plus a marking: write the new version with `xmin` = my transaction ID, stamp my ID into the old version's `xmax`. A DELETE is the marking alone. Each transaction carries a **snapshot** that records which transaction IDs were committed when it started, and it decides version-by-version: visible if its creator committed before my snapshot and its invalidator did not.
+
+Dead versions are reclaimed by **VACUUM**: it scans for versions whose `xmax` is set and old enough that no running transaction could still see them, and frees their space. "Old enough" is the load-bearing phrase, and the figure below lets you discover exactly where it gives way.
+
+<Figure
+  number={1}
+  label="tuple versions & vacuum"
+  caption="Four experiments, in order: Update a few times and watch versions pile up; Vacuum and watch the space free but the file not shrink; turn on workload + autovacuum and watch a healthy steady state; then Hold a long txn and watch the same autovacuum reclaim nothing while the disk fills."
+>
+  <MvccViz client:visible />
+</Figure>
+
+Start with one row. Press **Update** a few times and watch the heap: each press adds a green `r3 v2`-style chip (the new version, `xmin` stamped with a fresh transaction ID) and turns the previous version gray with an `✕` — dead, superseded, its `xmax` set to the updating transaction. The row count never changed. Eight rows are eight rows; the table grew anyway, because the table stores versions, not rows.
+
+Press **Vacuum**. The gray chips vanish and their slots go dashed — free, reusable. Notice what did _not_ happen: the page count in the stats row did not drop. Plain vacuum makes space reusable inside the file; it returns space to the operating system only when entire pages at the end of the table come up empty, which a workload that updates random rows almost never arranges. The file is a high-water mark of the worst bloat you ever had. That asymmetry is why the fix for a badly bloated table is not "run vacuum harder" — we get to that below.
+
+Now run the system as designed. Turn on **workload** (a stream of single-row UPDATEs, each its own instantly-committed transaction) and **autovacuum**, and let it sit. Dead tuples accumulate between autovacuum passes, each pass clears them, freed slots get reused instead of extending the file, and the page count settles at a small multiple of the minimum. This is the steady state the design intends: dead versions exist constantly, briefly, harmlessly. Some bloat is not a bug; it is the rent MVCC pays for lock-free readers.
+
+Then break it. With the workload still streaming, press **Hold a long txn**. That opens a `REPEATABLE READ` transaction and takes its snapshot — the blue badge shows its `snapshot xmin`, and blue outlines mark the versions it can see: the versions that were current at that instant. Watch what happens to every tuple the workload kills from now on: they turn amber `◆` — dead, but _pinned_. Autovacuum keeps firing on schedule; the event log shows it removing nothing, reporting an ever-growing count that _cannot be removed yet_, and naming the held `oldest xmin` as the reason. The bloat ratio climbs through 2×, 3×, and the heap fills with amber until the table hits the 16-page disk cap and updates start failing. The long transaction never wrote anything, never took a lock anyone wanted, never showed up in a lock-wait graph. It pinned thirty pages of corpses by _existing_.
+
+Press the commit button and run one more vacuum. Everything amber goes gray and gets swept, the freed pages absorb the workload again — and the page count stays at its high-water mark, the permanent scar of the incident.
+
+## The horizon, precisely
+
+Why exactly could vacuum not touch those versions? It is not a lock, and vacuum was not "blocked" — it ran to completion every time. The answer is a single comparison done tuple by tuple.
+
+Every snapshot has an **xmin**: the oldest transaction ID it considers still in flight; everything below it is settled history. Vacuum computes the minimum xmin across every open snapshot in the system — the **horizon**, reported in logs as `oldest xmin` — and may remove a dead version only if its `xmax` is _below_ that horizon. Below the horizon means the deletion is settled history to every present and future snapshot; at or above it means at least one snapshot was taken before the deletion committed and is still entitled to see the version alive.
+
+<Figure
+  number={2}
+  label="the visibility rule"
+  caption="One tuple, one snapshot. Slide the snapshot xmin left of the tuple's xmax: the dead tuple flips from removable to pinned. Slide it left of xmin too and the tuple isn't even visible to the snapshot — but stays pinned anyway."
+>
+  <VisibilityViz client:visible />
+</Figure>
+
+The widget exposes a subtlety worth dwelling on. Put the snapshot xmin _before_ the tuple's `xmin`: the tuple was created after the snapshot, so the snapshot cannot see it — and if it was also deleted after, vacuum still will not remove it. A version that no snapshot anywhere can see survives anyway, because the rule is the conservative `xmax < oldest xmin`, not a per-snapshot visibility proof. Hold a snapshot while a row is updated fifty times and all fifty intermediate versions are kept — for the benefit of a transaction that can see exactly one of them. The horizon is a guillotine, not a scalpel, and everything above the blade survives together. That is why the heap in figure 1 filled with amber far faster than "the old versions the transaction needs" would suggest.
+
+One more thing the figure quietly demonstrates: the long transaction holds the horizon with its _snapshot_, not with work. It is read-only — it was never even assigned a transaction ID of its own, since Postgres hands those out only at the first write. `REPEATABLE READ` keeps one snapshot for the transaction's whole life, so an idle session holds its xmin indefinitely. (`READ COMMITTED` takes a fresh snapshot per statement instead, but don't treat that as protection: the docs warn that any open idle-in-transaction session can prevent vacuuming recently-dead tuples — and a session that wrote anything holds the horizon through its transaction ID regardless of isolation level. The operational advice is to terminate idle transactions, not to audit their isolation levels.)
+
+## Failure modes
+
+**The idle-in-transaction session** is the classic, and the sim's break button is its faithful replica. The defense is blunt and effective: `idle_in_transaction_session_timeout` kills sessions that sit inside a transaction doing nothing; `pg_stat_activity` exposes `state = 'idle in transaction'` and each backend's `backend_xmin` so you can find today's culprit before setting it. The horizon-age meter in figure 1 is the number to alarm on — Postgres exposes it as the age of the oldest xmin, and it should never grow unbounded.
+
+**It is not only transactions.** Anything that needs old versions holds the horizon: a physical standby with `hot_standby_feedback` on extends its queries' xmin to the primary; a replication slot for a consumer that stopped consuming pins it indefinitely (the same shape of incident, no session to kill); a prepared transaction whose coordinator died holds it until someone resolves it; a multi-hour `pg_dump` is, for this purpose, one long transaction. The sim models a single held snapshot; production gives you a min() over all of the above.
+
+**The file never shrinks.** Vacuum's high-water-mark behavior means a one-time bloat event leaves a permanently outsized file with the free space trapped inside it. The honest fix is `VACUUM FULL`, which rewrites the table into a fresh file — at the cost of an `ACCESS EXCLUSIVE` lock for the duration and enough spare disk to hold the copy, which is why nobody runs it casually on a hot table (tools like pg_repack do the same rewrite with a much shorter lock window).
+
+**Transaction ID wraparound** is the slow-motion version of the same pinned horizon. Transaction IDs are 32-bit and compared circularly, so each one's snapshot arithmetic only works within about two billion transactions of when it was issued; before old IDs fall out of range, vacuum must **freeze** them — mark the tuples as "committed in the infinite past." A pinned horizon stalls freezing too, and the failure mode escalates from "table is bloated" to Postgres forcing aggressive anti-wraparound vacuums (at `autovacuum_freeze_max_age`, default 200 million transactions), then warning loudly, and ultimately refusing to assign new transaction IDs until vacuumed — a full write outage with your name on the postmortem. Same mechanism as figure 1; the meter runs to two billion instead of fifty.
+
+## What real Postgres adds
+
+The sim's autovacuum fires when dead tuples exceed a small fixed-plus-fraction threshold; that is the real formula scaled down. Autovacuum wakes every `autovacuum_naptime` (default one minute) and vacuums a table when its dead tuples exceed `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × reltuples` — defaults 50 and 0.2, so a fifty-million-row table waits for _ten million_ dead tuples before autovacuum looks at it. (PostgreSQL 18 finally caps the computed value with `autovacuum_vacuum_max_threshold`, default 100 million.) Tightening the scale factor per-table is the standard first move for hot tables.
+
+Real heap pages are 8 KB holding dozens to hundreds of tuples, and Postgres works harder than the sim to avoid bloat in the first place. A **HOT update** — possible when no indexed column changed and the old version's page has room — chains the new version on the same page without touching the indexes at all, and any later query stumbling on the page can _prune_ the chain's dead members without waiting for vacuum. Leaving headroom for this is what the `fillfactor` storage parameter is for. The sim also has no indexes, which hides a real cost: every non-HOT update inserts entries into every index on the table, dead index entries are their own bloat, and vacuum's index passes are usually where its time actually goes.
+
+The sim's other simplifications are labeled in its `SIMPLIFICATIONS` list: every workload transaction commits instantly (real visibility checks consult commit status, and aborted transactions leave dead versions too — vacuum cleans up after rollbacks as well as updates), the horizon comes from one possible snapshot rather than a system-wide minimum, vacuum is instantaneous rather than cost-throttled I/O, and free space is found first-fit rather than via the free space map.
+
+## What to do about it
+
+Watch two numbers: dead tuples per table (`pg_stat_user_tables.n_dead_tup`) and the age of the oldest xmin. The first tells you vacuum is losing; the second tells you _why_ — and it is the one that pages you before wraparound does. Set `idle_in_transaction_session_timeout` in production; the sessions it kills were already incidents waiting to fire. Monitor replication slots like the horizon-pinning machinery they are. Keep long analytics off the OLTP primary, or accept that their runtime is a bloat budget. And if a table is already huge and hollow, schedule the rewrite — more vacuum will not shrink it.
+
+The design itself is not the villain. Postgres trades space for the right to never make readers and writers wait on each other, and on the workloads it targets that is the right trade. The trade only goes bad when something holds the old side of the bargain open — and now you know exactly which line in `pg_stat_activity` to go look at.
+
+## Sources
+
+- PostgreSQL docs, [Concurrency Control — Introduction](https://www.postgresql.org/docs/current/mvcc-intro.html) — MVCC model: reading never blocks writing, writing never blocks reading.
+- PostgreSQL docs, [Routine Vacuuming](https://www.postgresql.org/docs/current/routine-vacuuming.html) — dead tuple recovery, plain `VACUUM` vs `VACUUM FULL`, space returned to the OS only for trailing empty pages, autovacuum threshold formula and defaults, transaction ID wraparound and freezing, `autovacuum_freeze_max_age`.
+- PostgreSQL docs, [Storage — Database Page Layout](https://www.postgresql.org/docs/current/storage-page-layout.html) — `t_xmin`/`t_xmax` in the heap tuple header; 8 KB pages.
+- PostgreSQL docs, [Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html) — `READ COMMITTED` takes a snapshot per statement; `REPEATABLE READ` holds one snapshot for the transaction.
+- PostgreSQL docs, [Transactions and Identifiers](https://www.postgresql.org/docs/current/transaction-id.html) — a permanent transaction ID is assigned only when a transaction first writes; read-only transactions run on virtual IDs.
+- PostgreSQL docs, [Automatic Vacuuming](https://www.postgresql.org/docs/current/runtime-config-vacuum.html) and [Client Connection Defaults](https://www.postgresql.org/docs/current/runtime-config-client.html) — autovacuum parameter defaults; `idle_in_transaction_session_timeout` and its bloat rationale.
+- PostgreSQL docs, [Replication Configuration](https://www.postgresql.org/docs/current/runtime-config-replication.html) — `hot_standby_feedback` "can cause database bloat on the primary for some workloads."
+- PostgreSQL docs, [Heap-Only Tuples (HOT)](https://www.postgresql.org/docs/current/storage-hot.html) — same-page update chains, no index entries, opportunistic pruning.
+- PostgreSQL docs, [The Statistics Collector / Monitoring](https://www.postgresql.org/docs/current/monitoring-stats.html) — `pg_stat_user_tables.n_dead_tup`, `pg_stat_activity.backend_xmin` and `state`.
+- PostgreSQL source, [`src/backend/storage/ipc/procarray.c`](https://github.com/postgres/postgres/blob/master/src/backend/storage/ipc/procarray.c) (`ComputeXidHorizons`) — the removal horizon as a minimum over backend xmins/xids, replication slots, and prepared transactions.
+- Hironobu Suzuki, [The Internals of PostgreSQL](https://www.interdb.jp/pg/), ch. 5 & 6 — tuple structure, visibility checks, and vacuum processing.
