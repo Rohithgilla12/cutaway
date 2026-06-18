@@ -1,0 +1,74 @@
+---
+title: "Transaction ID wraparound, or: the clock you didn't know was ticking"
+description: "Postgres numbers every transaction with a 32-bit counter and reads visibility off a circle. Freezing keeps the oldest end of that circle from being lapped — and one held snapshot stalls freezing the same way it stalls vacuum, until the database refuses to accept writes at all."
+number: 9
+pubDate: 2026-06-18
+draft: true
+---
+
+import Figure from "../../../components/Figure.astro";
+import WraparoundViz from "./components/WraparoundViz";
+
+There is a failure mode that has taken down Sentry, Mailchimp, Joyent, and a long tail of others who never wrote it up: the database stops accepting writes, prints an error nobody on the team has seen before, and the only documented fix begins with shutting the server down and booting it in single-user mode. The error mentions "wraparound." The incident usually traces back to something that had been quietly broken for weeks — an autovacuum that couldn't keep up, or a connection that never closed its transaction.
+
+This is the slow-motion sibling of the [MVCC bloat](/mvcc-bloat) problem. Same held-horizon mechanism, same culprit in `pg_stat_activity`, but instead of wasting disk it consumes something Postgres cannot buy more of: the room between the oldest transaction ID still in the database and the newest one. Run out of that room and the database halts itself on purpose, because the alternative is silent data loss. This piece is about why that room is finite, what keeps it open, and how it closes.
+
+## Why the counter is a circle
+
+Every transaction that writes gets a **transaction ID** — an xid — from a counter. Each row version records the xid that created it (`xmin`) and visibility is decided by comparing those xids: did the transaction that made this version commit before my snapshot? The catch is that the counter is 32 bits. After about four billion transactions it runs out of distinct values and must reuse them, and a busy database burns through four billion in days to weeks.
+
+Postgres handles this by treating the xid space as a **circle**. Comparisons aren't "is xid A less than xid B" but "is A in the roughly two billion ids *behind* B, or the two billion *ahead*." Any given xid has about 2³¹ ≈ 2.1 billion transactions in its past and 2.1 billion in its future, and that's the whole usable window. As long as every live row's `xmin` stays within ~2.1 billion of the current xid, the modular comparison gives the right answer. The danger is a row version so old that the counter laps it: a tuple whose creating transaction is *more* than 2.1 billion xids behind suddenly compares as being in the *future*, and a row that was visible to everyone becomes invisible to everyone. Committed data vanishes. That is the data loss the shutdown exists to prevent.
+
+The fix is **freezing**. A frozen tuple is marked as committed-in-the-infinite-past — visible to every transaction regardless of xid arithmetic, exempt from the circle entirely. Vacuum freezes old tuples and, having done so, advances a marker called **`relfrozenxid`**: the oldest unfrozen xid still in the table. The cluster's safety is the distance between the oldest `relfrozenxid` anywhere and the current xid. Keep that distance comfortably under 2.1 billion and you never think about any of this. Let it grow and the clock starts ticking.
+
+<Figure
+  number={1}
+  label="the xid clock"
+  caption="The ring is the 2.1-billion-xid space. relfrozenxid sits at the top; the colored arc is the age of the oldest unfrozen xid, sweeping toward nextXid. Burn xids to age the cluster, VACUUM FREEZE to claw relfrozenxid forward. Then Hold a long txn, turn on the workload, and watch freezing stall while the arc marches past force → warn → stop."
+>
+  <WraparoundViz client:visible />
+</Figure>
+
+Start healthy: the arc is a thin sliver, because freezing keeps the oldest unfrozen xid about fifty million transactions behind the present (that's `vacuum_freeze_min_age` — there's no point freezing very recent tuples that will likely change again). Press **Burn 100M xids** a few times and the arc grows; press **VACUUM FREEZE** and it snaps back as `relfrozenxid` jumps forward to catch the present. That is the healthy cycle: age accumulates, freezing resets it, the arc never gets far from the top.
+
+## The horizon stalls freezing
+
+Now break it, exactly as in the MVCC piece. Press **Hold a long txn** — this pins a snapshot at the current xid — then turn on the **workload** and let it run.
+
+Freezing has the same constraint vacuum's cleanup does: it may not freeze a tuple newer than the oldest snapshot any transaction still holds, because freezing changes a tuple's visibility and an open snapshot is entitled to its current view. So `relfrozenxid` cannot advance past the **oldest xmin** in the system — and a held transaction pins that xmin in place. Watch the ring: `relfrozenxid` clamps at the amber pinned marker and stops, while `nextXid` keeps sweeping around as the workload burns ids. The arc — the age — widens with every transaction, and `VACUUM FREEZE` does nothing. Press it as many times as you like; the event log reports `relfrozenxid` stuck at the pinned horizon. The same idle transaction that would bloat your table with dead tuples is now also preventing the freeze that the wraparound clock depends on.
+
+The arc crosses the first tick, **force**, at two hundred million xids of age. This is `autovacuum_freeze_max_age`, and crossing it makes Postgres launch an anti-wraparound autovacuum on the table — *even if autovacuum is turned off*. That detail surprises people: disabling autovacuum does not disable this. But the forced vacuum is bound by the same horizon as every other freeze, so against a pinned snapshot it runs and accomplishes nothing, round after round, while the arc keeps growing.
+
+## The walls
+
+Keep the workload running and the arc reaches the danger ticks near the far side of the circle — most of the ring is the runway you burn through while the horizon is pinned.
+
+At **forty million transactions from the wraparound point**, the server starts logging `WARNING: database "…" must be vacuumed within N transactions`, counting down. This is the last loud signal before the outage, and it is the line that should already be paging you.
+
+At **fewer than three million transactions** remaining, Postgres stops. It refuses to assign new xids: `ERROR: database is not accepting commands that assign new XIDs to avoid wraparound data loss`. Writes fail across the entire cluster. The three-million margin is deliberate — it is the runway the engine reserves so an administrator can still run a vacuum to recover. In the figure, `nextXid` stops advancing the moment you hit this state: no new transactions, no new ids, a hard write outage.
+
+Recovery is the part worth rehearsing before you need it. The forced vacuum can't help while the snapshot is held — try it; the ring stays red. You have to **release the horizon first**: find and kill the transaction (or drop the replication slot, or resolve the prepared transaction) that pinned the oldest xmin, *then* vacuum. Press **Release snapshot**, then **VACUUM FREEZE**: now `relfrozenxid` leaps forward to the present, the arc collapses to its healthy sliver, and writes resume. In production this is `postgres --single` and a database-wide `VACUUM`, but the order is the same — unpin, then freeze. Vacuuming first while the horizon is still held is the mistake that turns a one-hour outage into a six-hour one.
+
+## Failure modes
+
+**The held transaction** is the headline, and it's the same `pg_stat_activity` row from the bloat piece: a `backend_xmin` that never advances. Here it doesn't just waste space, it stalls freezing toward the wall. `idle_in_transaction_session_timeout` defends against it; so does alerting on the age of the oldest xid directly (`age(datfrozenxid)` per database, `age(relfrozenxid)` per table) long before any warning fires.
+
+**The replication slot and the standby.** A logical replication slot whose consumer stopped, or a physical standby with `hot_standby_feedback` on, pins the horizon with no local session to kill — `pg_replication_slots.xmin` is the thing holding the clock. These are the wraparound incidents that look mysterious because nothing in `pg_stat_activity` explains them.
+
+**Autovacuum that can't keep up — without any pinned horizon.** Freezing is I/O, and on a huge, write-heavy table autovacuum can simply fall behind, especially if it's been throttled or repeatedly cancelled by competing locks (an `ALTER TABLE`, an aggressive lock timeout). No idle transaction required; the age just climbs because the freezing work isn't getting done. The forced anti-wraparound vacuum at 200 million is the backstop, and it's also why a table that "suddenly" runs an unkillable autovacuum is often days from a wraparound it was quietly approaching.
+
+## What real Postgres adds
+
+The sim tracks one number for the whole cluster. Reality is per-table `relfrozenxid` and per-database `datfrozenxid`, and your exposure is the minimum across all of them — so the work is finding *which* table holds the oldest one (`SELECT relname, age(relfrozenxid) FROM pg_class ORDER BY age DESC`). Freezing isn't an instant jump either: vacuum scans pages, sets a frozen flag on individual tuples, and uses the visibility map to skip pages already known all-frozen, so the cost scales with unfrozen pages, not table size. A normal vacuum turns *aggressive* (scanning even all-visible pages to freeze them) once the table's age passes `vacuum_freeze_table_age`, the gentler cousin of the forced vacuum at `autovacuum_freeze_max_age`. And the modular comparison is signed 32-bit arithmetic on the real `pg_xact` commit log, with `pg_commit_ts` storage costs the docs put concrete megabytes on. The 64-bit-xid work that would dissolve this entire problem has been proposed upstream for years; until it lands, the circle is 32 bits wide.
+
+## What to do about it
+
+Alert on `age(datfrozenxid)`, not on disk. It is the one metric that predicts this outage, and it climbs for days before the first warning — there is no excuse for being surprised by it. Set `idle_in_transaction_session_timeout` and monitor replication slot xmins, because the same pinned horizon that bloats also stalls freezing. Don't disable autovacuum thinking you've bought quiet; you've only ensured the first vacuum you see will be a forced anti-wraparound one at the worst possible time. And if you are already in the red, remember the order: release whatever pins the horizon, *then* vacuum. The clock was always running; freezing is just the maintenance that keeps resetting it, and a held snapshot is the thing that quietly unplugs the maintenance.
+
+## Sources
+
+- PostgreSQL docs, [Routine Vacuuming — Preventing Transaction ID Wraparound Failures](https://www.postgresql.org/docs/current/routine-vacuuming.html) — the 32-bit xid space and modular comparison; ~2 billion past/future window; freezing and `relfrozenxid`/`datfrozenxid`; `autovacuum_freeze_max_age` default 200 million forcing an anti-wraparound autovacuum even when autovacuum is disabled; warnings beginning forty million transactions from wraparound; refusal of new XIDs under three million remaining; the exact `database is not accepting commands that assign new XIDs to avoid wraparound data loss` error; single-user-mode recovery; the visibility-map all-frozen optimization.
+- PostgreSQL docs, [Resource Consumption — VACUUM](https://www.postgresql.org/docs/current/runtime-config-resource.html) and [Client Connection Defaults](https://www.postgresql.org/docs/current/runtime-config-client.html) — `vacuum_freeze_min_age` (default 50 million), `vacuum_freeze_table_age` (default 150 million), `idle_in_transaction_session_timeout`.
+- PostgreSQL docs, [Transactions and Identifiers](https://www.postgresql.org/docs/current/transaction-id.html) — xids assigned only to writing transactions; 32-bit, with the wraparound note and the in-progress 64-bit work.
+- PostgreSQL docs, [Storage — Database Page Layout](https://www.postgresql.org/docs/current/storage-page-layout.html) and [Routine Vacuuming](https://www.postgresql.org/docs/current/routine-vacuuming.html) — the per-tuple frozen flag / `HEAP_XMIN_FROZEN` hint bits replacing the old `FrozenTransactionId`.
+- PostgreSQL docs, [The Cumulative Statistics System](https://www.postgresql.org/docs/current/monitoring-stats.html) — `pg_stat_activity.backend_xmin`, `pg_replication_slots.xmin` as horizon holders; `age()` over `pg_class.relfrozenxid` / `pg_database.datfrozenxid` for monitoring.

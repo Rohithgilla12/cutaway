@@ -1,0 +1,68 @@
+---
+title: "B-tree page splits, or: why your UUID index is twice the size"
+description: "A B-tree stays balanced by splitting full pages and growing from the leaves up. Where the splits land — and how full the pages end up — is decided entirely by the order you insert keys. Feed it sequential keys and it packs tight; feed it random UUIDs and watch it settle at two-thirds empty."
+number: 10
+pubDate: 2026-06-18
+draft: true
+---
+
+import Figure from "../../../components/Figure.astro";
+import BtreeViz from "./components/BtreeViz";
+
+Two tables, same hundred million rows, both keyed by a 16-byte UUID. One generates them as UUIDv7 (time-ordered); the other as random UUIDv4. Same column type, same key width, same number of entries, same Postgres — and the v7 index is roughly a quarter smaller, packs its pages near full, and inserts faster while dirtying fewer pages. The only difference is that one key arrives in order and the other doesn't, and that is enough to leave one index packed tight and the other a third empty.
+
+The B-tree is the default index, the one you get when you type `CREATE INDEX` and the one under every primary key. It is genuinely elegant: it stays balanced no matter what you throw at it, and a lookup in a billion-row table touches three or four pages. But "stays balanced" is doing real work, and the work is **page splits**. How often they happen, where they land, and how full they leave the pages is not a property of the B-tree — it is a property of your insertion pattern. This piece is about watching that happen.
+
+## Splitting, from the leaves up
+
+A Postgres B-tree is a B+tree: every key lives in a **leaf page**, and the **internal pages** above hold only separator keys and pointers, a routing table for finding the right leaf. A page holds a bounded number of entries — in real Postgres, an 8 KB page holds hundreds; in the figure below, a leaf holds five, so things happen fast enough to watch.
+
+Insertion is simple until a page is full. Descend from the root following separators, land on a leaf, drop the key in sorted order. If the leaf still has room, done. If it doesn't, the leaf **splits**: it cuts itself in two, keeps the lower keys, hands the upper keys to a brand-new sibling page, and pushes one separator key up to its parent. If that push fills the parent, the parent splits too, and the cascade can reach the root — when the root splits, the tree gains a level. This is the only way a B-tree grows taller, and it always grows from the bottom, which is what keeps every leaf at exactly the same depth. That equal depth is the whole point: it is why every lookup costs the same.
+
+<Figure
+  number={1}
+  label="a growing B+tree"
+  caption="Pick sequential or random keys and Insert (or turn on the stream). Watch leaves fill, split, and push separators up until the root splits and the tree gains a level. The bar under each leaf is its fill; green is packed, red is half-empty. Compare the 'space used' and 'interior splits' stats between the two key orders."
+>
+  <BtreeViz client:visible />
+</Figure>
+
+Leave it on **sequential** and insert a few dozen keys. Every key is the new maximum, so every insert lands in the rightmost leaf, and every split happens *there* — the `interior splits` counter stays at zero. Each split leaves the left page nearly full and starts a fresh rightmost page to catch the keys still arriving in order. The fill bars stay green, "space used" hovers near 90%, and the tree climbs to three levels through splits that all occur at the right edge. This is the happy path, and it is exactly what a `bigserial` or a timestamp key does.
+
+## The thing you can break: random keys
+
+Switch to **random** and reset. Now each key lands somewhere in the middle of the tree, in whatever leaf happens to own its range. A full leaf in the middle can't do the rightmost trick — there is no "rest of the sequence" coming to fill a new right page — so it splits down the middle, 50/50, leaving *both* halves about half full. The `interior splits` counter climbs, the fill bars turn amber and red, and "space used" settles down around two-thirds. Insert the same number of keys as the sequential run and you'll have more leaves, more total splits, and a tree holding the same keys in noticeably more space.
+
+That two-thirds is not random noise. Random insertions into a B-tree converge on about 69% page utilization — a classic result (it's ln 2) — because every page spends its life somewhere between "just split, half full" and "about to split, full." Sequential insertion escapes the average because it never splits a page it will come back to; it fills each page once, to the fillfactor, and moves on. The gap between 69% and 90% is the gap between your UUID index and your serial index, and at a hundred million rows it is gigabytes.
+
+It costs more than space. Each split is extra work on the insert that triggered it, and in real Postgres each split is written to the WAL and makes the newly-split pages dirty — which, right after a checkpoint, means full-page images written to disk. A random-key workload doesn't just build a bigger index; it does more I/O building it, and scatters its writes across the whole index instead of concentrating them at the right edge. The rightmost-leaf concentration that makes sequential keys efficient on space is also, under concurrency, a single hot page every inserter contends on — the one tax sequential keys do pay, and the reason very high-throughput append workloads sometimes deliberately hash their keys.
+
+## The fillfactor knob
+
+Drag the **fillfactor** slider down and re-run the sequential insert. The pages now split earlier on the rightmost path, leaving deliberate free space in each leaf. On a pure-insert index that is wasted room — which is why the B-tree default is 90%, packing leaves nearly full. But the free space has a purpose on a table that gets *updated*: it leaves room for new index entries to land on the same page instead of forcing a split, and it interacts with the heap's [HOT-update](/mvcc-bloat) optimization. The slider is the same `fillfactor` storage parameter you'd set on `CREATE INDEX`; 90 for write-once, lower for heavily-updated.
+
+## What deletes don't do
+
+Insert a full tree, then delete most of the keys. Watch the leaf count: it barely moves. A B-tree does **not** merge underfull pages back together. Postgres reclaims a leaf page only when it becomes *completely* empty (and even then it's VACUUM that does it, later, not the delete itself); a page that drops from five keys to one stays a page with one key on it. Delete half your rows at random and you don't get a smaller index — you get the same number of pages, each half empty, and queries still walk the same number of them. This is index bloat from the other direction, and the only real fix is to rebuild: `REINDEX` (concurrently, since Postgres 12) writes a fresh, densely-packed tree.
+
+This is the same shape as the [heap bloat](/mvcc-bloat) story — space that's logically free but physically stuck — and it's why an index can keep growing under a churning workload even when the row count is flat.
+
+## What real Postgres adds
+
+The figure's pages hold five keys; real 8 KB pages hold hundreds, which is why real B-trees are wide and shallow — three or four levels over billions of rows, where this toy is three levels over forty keys. Postgres's split-point logic (`_bt_findsplitloc`) is subtler than the clean ratio modeled here: it evaluates many candidate split points to balance fill against keeping related keys together, and it has specific handling for the rightmost page and for pages full of duplicates. Leaves also aren't bare key lists — each entry is a key plus a heap pointer, and since version 13 Postgres *deduplicates* repeated keys into posting lists, which delays splits on low-cardinality indexes. Version 14 added *bottom-up index deletion*, which opportunistically clears out dead entries from version churn before resorting to a split — a direct attack on the update-driven bloat the delete demo hints at. And the real tree is a Lehman-Yao B-link tree, with right-links and a clever locking protocol that lets readers descend without blocking on concurrent splits — the concurrency story this single-threaded sim omits entirely.
+
+None of that changes the lesson the fill bars teach: the B-tree's shape is balanced for you automatically, but its *density* is yours to ruin with the wrong key.
+
+## What to do about it
+
+Prefer keys that arrive in order. `bigserial`, an `identity` column, a timestamp, or a UUIDv7 (time-ordered) all pack the index tight and keep splits at the right edge; random UUIDv4 keys cost you a third of the index to bloat and scatter your write I/O. If you're stuck with random keys, know that the index will run looser and budget for it — and consider whether that column needs to be the physical primary key at all. Watch index size against row count (`pg_stat_user_indexes`, the `pgstattuple` extension for real leaf density); when an index has bloated from churn or mass deletes, `REINDEX CONCURRENTLY` is the rebuild that reclaims it. And set `fillfactor` deliberately: high for append-mostly, lower for update-heavy.
+
+## Sources
+
+- PostgreSQL source, [`src/backend/access/nbtree/README`](https://github.com/postgres/postgres/blob/master/src/backend/access/nbtree/README) — the Lehman-Yao B-link tree, right-links and the split protocol, page deletion only of empty pages (no merging of underfull pages), bottom-up index deletion, and deduplication.
+- PostgreSQL source, [`src/backend/access/nbtree/nbtsplitloc.c`](https://github.com/postgres/postgres/blob/master/src/backend/access/nbtree/nbtsplitloc.c) — `_bt_findsplitloc`: candidate split-point evaluation, the rightmost-page (leaf-append) heuristic that packs sequential inserts to fillfactor, and the default 50/50 behavior otherwise.
+- PostgreSQL docs, [`CREATE INDEX` — Index Storage Parameters](https://www.postgresql.org/docs/current/sql-createindex.html) — the `fillfactor` parameter and its B-tree default of 90.
+- PostgreSQL docs, [Index Access Method Interface — B-Tree / Implementation](https://www.postgresql.org/docs/current/btree-implementation.html) — B+tree structure (keys in leaves), deduplication and posting lists, bottom-up deletion, the fast-path for rightmost insertions.
+- PostgreSQL docs, [`REINDEX`](https://www.postgresql.org/docs/current/sql-reindex.html) — rebuilding a bloated index, `REINDEX CONCURRENTLY`.
+- PostgreSQL docs, [`pgstattuple`](https://www.postgresql.org/docs/current/pgstattuple.html) — measuring real index leaf density / bloat (`pgstatindex` `avg_leaf_density`).
+- Donald Knuth, *The Art of Computer Programming, Vol. 3*, §6.2.4 — the ≈69% (ln 2) expected page utilization for random insertion into a B-tree.

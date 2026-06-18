@@ -1,0 +1,71 @@
+---
+title: "Quorums, or: why R + W > N is the whole ballgame"
+description: "A leaderless replicated store has no single copy of the truth — just N replicas and two numbers, how many you write to and how many you read from. One inequality decides whether a read can come back stale. Set it wrong, partition the right nodes, and watch a value you just wrote vanish."
+number: 11
+pubDate: 2026-06-18
+draft: true
+---
+
+import Figure from "../../../components/Figure.astro";
+import QuorumViz from "./components/QuorumViz";
+
+You write a value to your distributed key-value store. The write returns success. A few milliseconds later you read the same key back and get the *old* value. No node crashed, no error was logged, no network call failed. The store is doing exactly what its configuration tells it to do — and its configuration permits this.
+
+This is the world of leaderless replication: Dynamo, Cassandra, Riak, ScyllaDB, and the storage layer of plenty of systems that don't advertise it. There is no primary copy to ask. There are N replicas of each key, and every read and write talks to some subset of them. Whether "write then read" returns what you wrote comes down to a single inequality between three small integers, and getting it wrong is not a bug in the database — it's a consistency level you selected, usually by accepting a default. This piece is about that inequality, why it works, and exactly where it stops working.
+
+## N, W, R
+
+Replication factor **N** is how many copies of each key the cluster keeps — say five. There is no leader; the five replicas are peers. To write, a coordinator sends the new value to all the replicas it can reach and waits for **W** of them to acknowledge before calling the write a success. To read, it queries replicas and waits for **R** of them to respond, then returns the newest version it got back (replicas tag each value with a version so "newest" is well-defined).
+
+W and R are knobs. Set W = N and every write must reach every replica: durable, but one slow or partitioned node stalls all writes. Set W = 1 and a write succeeds the instant a single replica takes it: fast and available, but now four of your five replicas are stale until the value propagates, and a read might hit those four. The same trade runs the other way for R. The interesting question is what combinations of R and W keep reads honest.
+
+## The inequality
+
+A read sees the latest write whenever the set of replicas the read talks to **overlaps** the set the write went to — because then at least one replica in the read set carries the new version, and "newest wins" picks it. The write touched W replicas; the read touches R. By the pigeonhole principle, any R replicas and any W replicas out of N are *forced* to share at least one when:
+
+**R + W > N**
+
+That's the whole guarantee. It is not a property of any particular database — it's arithmetic. If R + W > N, you cannot choose R replicas and W replicas out of N that miss each other, so a successful read always intersects the latest successful write. If R + W ≤ N, you can: there is room for the read set and the write set to be disjoint, and when they are, the read comes back stale.
+
+<Figure
+  number={1}
+  label="quorum overlap"
+  caption="Set N, W, R with the sliders (watch the R+W vs N readout). Write a value — the W replicas it lands on are marked. Then partition replicas and Read — the R responders are marked, and the overlap is called out. With R+W≤N, partition the write's replicas and read a stale value. Then raise R or W past N and try again."
+>
+  <QuorumViz client:visible />
+</Figure>
+
+Start at the default the figure loads: N = 5, W = 2, R = 2, so R + W = 4, which is *not* greater than 5. Press **Write** — the new value lands on two replicas, marked `W`. Now partition those two replicas (click them), and press **Read**. The read talks to two of the three survivors, both of which still hold the old value, and returns it: a stale read, flagged red, while the panel confirms the latest value is sitting right there on the partitioned nodes. You wrote it, the write succeeded, and the read can't see it. Nothing is broken.
+
+Now raise W to 3 and R to 3, so R + W = 6 > 5, and reset. Write lands on three replicas. Partition two of them and read: the read needs three responders, only three replicas are reachable, and at least one of them *must* be a replica that took the write — there's no room for it not to be. The read comes back fresh. The overlap is no longer luck; it's forced.
+
+## The cost of the guarantee is availability
+
+Play with that R + W = 6 case a little more and you'll find the catch. Write to three replicas, then partition all three. Now only two replicas are reachable, the read needs three, and it can't assemble a quorum — the read **fails**. Not stale: unavailable.
+
+That is not a flaw in the figure; it is the trade laid bare. R + W > N buys consistency by requiring large quorums, and large quorums are harder to assemble when nodes are down. The same partition that *would* have produced a stale read under R + W ≤ N produces an *unavailable* read under R + W > N. You can have the read return possibly-stale data, or refuse to return data, but during a partition you cannot always have it return fresh data. This is the CAP trade-off, made concrete in two integers: lowering R and W moves you toward availability and stale reads; raising them moves you toward consistency and unavailability.
+
+This is why the textbook default is N = 3, W = 2, R = 2. R + W = 4 > 3, so reads are consistent, and the cluster tolerates one node down for both reads and writes (you can still get 2 of the remaining 2... or 2 of 3). It's the smallest configuration that keeps the guarantee while surviving a single failure.
+
+## Sloppy quorums give availability back — and take the guarantee
+
+There's a way to keep writing during a partition even when the home replicas are unreachable: write to whatever healthy nodes you *can* reach, even ones that don't normally own this key, and leave them a note to forward the data to the rightful owners once those come back. This is a **sloppy quorum**, and the forwarding is **hinted handoff**.
+
+Turn on **sloppy quorum** in the figure, raise W above the number of reachable replicas, and write. The write collects its W acknowledgments by parking the extra ones on stand-in nodes — and succeeds. But watch the read: it queries the *home* replicas, and the value is sitting on a stand-in that no read consults. The write said success; a strict read of the home replicas still comes back stale. The R + W > N arithmetic assumed the write and read sets are drawn from the *same* N replicas. A sloppy quorum breaks that assumption: the write's W nodes and the read's R nodes are no longer subsets of one N-set, so their counts no longer force an overlap. Sloppy quorums raise write availability and explicitly weaken the consistency guarantee — useful, and a real footgun if you assumed R + W > N still meant something. Heal the partitioned replica and hinted handoff delivers the parked value to its rightful owner; the stand-in goes idle again.
+
+## Even R + W > N isn't linearizability
+
+It is tempting to read "R + W > N" as "strongly consistent," and it isn't quite. The overlap argument guarantees a read intersects the latest *successfully completed* write, but real clusters have edges the argument doesn't cover. Two clients writing the same key concurrently both reach quorums, and now two versions exist with no agreed order — leaderless stores surface this as conflicting **siblings**, resolved by **vector clocks** (Dynamo's choice: hand the conflict to the application) or papered over by **last-write-wins** on a timestamp (Cassandra's default: simple, and silently drops one of two concurrent writes). A write that reached only some replicas before the coordinator died isn't rolled back, so a later read might or might not see it depending on which replicas answer. The honest statement is the one Kleppmann makes: quorums give you a *tunable* consistency knob, not linearizability, and the dial has more edge cases than the clean inequality suggests.
+
+The replicas do drift back toward agreement through two mechanisms the figure hints at. **Read repair**: when a read sees that some responders are behind, it writes the freshest version back to them on the spot — toggle it on and watch stale responders catch up after a read. And **anti-entropy**: a background process that compares replicas (via Merkle trees, to avoid shipping everything) and repairs differences a read never happened to touch. Without anti-entropy, a value on a replica that no read ever queries can stay stale indefinitely.
+
+## What to do about it
+
+Pick R and W from the workload, not the defaults page. R + W > N is the line between "a read can lie to me" and "a read can refuse me"; know which side you're on for each key space. Write-heavy and latency-sensitive? Lower W (W = 1 with read repair and anti-entropy is a real choice for metrics and logs, where a lost or stale write is cheap). Read-heavy and correctness-sensitive? Keep R + W > N and accept that a bad-enough partition makes reads fail. Treat sloppy quorum as what it is — an availability feature that suspends the consistency guarantee — and don't reach for quorums at all when you need true linearizability or multi-key transactions; that's what consensus systems like [Raft](/raft-leader-election) and single-leader databases are for. The three integers are simple. The decision they encode — how much staleness you'll trade for how much availability — is the actual design.
+
+## Sources
+
+- Giuseppe DeCandia et al., ["Dynamo: Amazon's Highly Available Key-value Store"](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) (SOSP 2007) — N/R/W quorum configuration; the R + W > N overlap condition; sloppy quorum and hinted handoff; vector clocks for versioning and conflict reconciliation; read repair and Merkle-tree anti-entropy.
+- Martin Kleppmann, *Designing Data-Intensive Applications* (2017), ch. 5 "Replication" — leaderless replication, quorum reads and writes, the R + W > N rule and the "Limitations of Quorum Consistency" (why it is not linearizability: concurrent writes, sloppy quorums, partially-failed writes), last-write-wins vs siblings.
+- Apache Cassandra docs, [Data consistency / tunable consistency](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) — per-query consistency levels (ONE/QUORUM/ALL), `QUORUM` as ⌊N/2⌋+1, last-write-wins conflict resolution, read repair and hinted handoff in a production system.
+- Werner Vogels, ["Eventually Consistent"](https://www.allthingsdistributed.com/2008/12/eventually_consistent.html) (2008) — the R + W > N vs R + W ≤ N framing and the consistency/latency trade it encodes.

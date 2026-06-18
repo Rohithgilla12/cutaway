@@ -1,0 +1,92 @@
+---
+title: "Isolation levels, or: which anomalies you agreed to ship"
+description: "Read Committed, Repeatable Read, Serializable — three settings of one dial, each defined by the anomalies it still lets through. Interleave two transactions, watch a committed wrong answer appear, then raise the level until the database aborts one of them instead."
+number: 8
+pubDate: 2026-06-18
+draft: true
+---
+
+import Figure from "../../../components/Figure.astro";
+import IsolationViz from "./components/IsolationViz";
+
+Two on-call engineers each open the rota tool at the same time. Each sees that two people are on call — themselves and the other — decides that's one more than the minimum, and takes themselves off. Both checks passed against a true fact. Both writes committed. Nobody is on call, and the page that fires at 3 AM goes to a rotation of zero.
+
+No row was written twice. No constraint was dropped. Each transaction read consistent data, made a locally correct decision, and committed without error. The bug lives entirely in how the two transactions were allowed to interleave — and the only knob that governs that is the isolation level, a setting most applications inherit as a default and never think about again. This piece is about what each setting actually buys, stated the way the standard states it: not as a guarantee you gain, but as a list of anomalies you stop permitting.
+
+## The dial, and what it is made of
+
+SQL names four isolation levels. Postgres implements three distinct behaviors: **Read Committed** (the default), **Repeatable Read**, and **Serializable**. (It accepts `READ UNCOMMITTED` but runs it as Read Committed — Postgres never shows you uncommitted data.) Each level is defined by which phenomena it forbids: a dirty read, a non-repeatable read, a phantom, or the general case, a serialization anomaly.
+
+The mechanism underneath is the MVCC snapshot from the [previous piece](/mvcc-bloat): a transaction reads the version of each row that was committed as of some point in time. The only thing the isolation level changes is *when that point is*:
+
+- **Read Committed** takes a fresh snapshot at the start of every statement. Between two statements in the same transaction, the world can move.
+- **Repeatable Read** takes one snapshot at the first statement and holds it for the whole transaction. The world freezes at `BEGIN`.
+- **Serializable** uses that same frozen snapshot and *also* watches the read/write dependencies between concurrent transactions, aborting one if their interleaving could not have happened in any serial order.
+
+That is the entire difference. Three policies for one timestamp, plus one extra detector at the top. The figure runs two transactions against a shared database; you choose the interleaving statement by statement and choose the level. Start on **Write skew** — the rota bug above — and step T1 and T2 alternately.
+
+<Figure
+  number={1}
+  label="two transactions, one dial"
+  caption="Pick a scenario (tabs), pick an isolation level (RC / RR / SER), and either Run T1 / Run T2 to interleave by hand or Auto-run the scripted schedule. Watch the verdict band at the bottom: a committed wrong answer, or an abort. Try every scenario at every level."
+>
+  <IsolationViz client:visible />
+</Figure>
+
+At **Read Committed**, both transactions read two doctors on call, both write their own row, both commit. The verdict band turns red: nobody on call. At **Repeatable Read**, the same thing happens — and this is the surprise that costs people incidents. Repeatable Read froze each transaction's snapshot, so each still sees two on call, and because the two transactions write *different rows* (`alice` and `bob`), there is no write-write conflict for the engine to catch. Snapshot isolation does not see the problem. Only at **Serializable** does the verdict flip green: one transaction commits, the other aborts with `40001`, and the rota keeps a doctor.
+
+## Read Committed: the world moves between your statements
+
+Read Committed is the default, and most of its surprises come from the same source: a fresh snapshot per statement means two reads of the same row in one transaction can return different values.
+
+Switch to the **Non-repeatable read** scenario. T1 reads `x`, T2 writes `x = 200` and commits, T1 reads `x` again. At Read Committed, T1's second read takes a new snapshot that includes T2's commit, so it sees `100` then `200`. The row changed under a transaction that never touched it. Switch the dial to Repeatable Read and replay: T1's snapshot is fixed at its first statement, T2's commit lands after it, and both reads return `100`. Repeatable, by construction.
+
+The **Phantom read** scenario is the same shape one level up: instead of a row changing value, a new matching row appears. T1 counts pending orders, T2 inserts one and commits, T1 counts again. Read Committed sees `2` then `3`. Here the SQL standard and Postgres part ways: the standard permits phantoms at Repeatable Read, but Postgres's Repeatable Read is true snapshot isolation, and the frozen snapshot hides the inserted row exactly as it hides an updated one. Set the dial to RR and the count stays `2`. Postgres's Repeatable Read is strictly stronger than the standard requires.
+
+The expensive Read Committed anomaly is **Lost update**, and it is worth slowing down. Two transactions each read a balance of `100`, each compute a new value from what they read, each write it back. The schedule blocks the second writer on the first one's row lock — Postgres serializes concurrent writers to the same row — so T2 waits until T1 commits, then proceeds. At Read Committed, T2 proceeds with the value it read *before* it blocked: `100`. It writes `120`, clobbering T1's `110`. The `+10` is gone, committed over, unrecoverable. Final balance `120` where it should be `130`.
+
+The trap is that the single-statement form, `UPDATE accounts SET balance = balance + 20`, is safe even at Read Committed: when the blocked statement wakes, it re-reads the row it is updating and re-applies the arithmetic to the new value. Lost update needs the read and the write to be *separate statements* — the read-modify-write that every ORM and every "fetch the object, change a field, save it" code path performs. Read Committed protects the row inside one statement and abandons it between two.
+
+## Repeatable Read: frozen, but not serializable
+
+Raise the dial to Repeatable Read and the lost update changes character. Replay the scenario: T2 still blocks on T1's lock, but when it wakes and finds that T1 committed a change to the row *after T2's snapshot was taken*, it cannot silently proceed — its snapshot says the balance is `100`, reality says `110`, and there is no honest way to apply an update on top of a value it can't see. Postgres aborts it: `ERROR: could not serialize access due to concurrent update`, SQLSTATE `40001`. This is **first-updater-wins**: the first transaction to commit a change to a row wins, and any concurrent transaction that already read an older version and tries to write must abort and retry.
+
+So Repeatable Read does not *lose* the update — but it does not *complete* it either. It converts a silent data-corruption bug into a loud error your application must catch and retry. That is the deal snapshot isolation offers across the board: every anomaly that comes from one transaction *reading then overwriting* the same row it touched is caught, because that is a write-write conflict on a single row.
+
+What it misses is every anomaly that lives *between* rows. That is write skew, and it is the whole reason Serializable exists. The two rota transactions read an overlapping set (`alice`, `bob`), each wrote a *different* member of that set, and never collided on a single row. Snapshot isolation has nothing to conflict on. Both commit against snapshots that were each individually consistent and jointly impossible. Repeatable Read froze the world for each transaction and never checked whether the two frozen worlds could be lined up end to end.
+
+## Serializable: watching the dependency graph
+
+Serializable adds the missing check. On top of the snapshot, it tracks **rw-antidependencies**: T1 *read* a row that T2 then *wrote*. Such an edge means T1 must have run "before" T2 in any equivalent serial order — T1 saw the world as it was prior to T2's change. The edges form a graph, and a result is serializable exactly when that graph has no cycle.
+
+The theorem Postgres leans on (from Cahill, Ríos, and Fekete's work on serializable snapshot isolation) is sharper than "find a cycle": *every* cycle in the dependency graph of snapshot-isolation transactions contains a transaction with two consecutive rw-antidependency edges — one coming in, one going out. That transaction is the **pivot**. You don't have to find whole cycles; you only have to spot a pivot, which is cheap. Switch the figure to Serializable on the write-skew scenario and step through it: the SSI dependency graph appears, an edge `T1 → T2` forms (T1 read `bob`, which T2 wrote), then `T2 → T1` forms (T2 read `alice`, which T1 wrote), and the moment the second commit would close that cycle, Postgres aborts the pivot with `ERROR: could not serialize access due to read/write dependencies among transactions`.
+
+Note the two different `40001` messages. *"Concurrent update"* is the first-updater-wins write-write conflict you also get at Repeatable Read. *"Read/write dependencies among transactions"* is the SSI detector firing on a dangerous structure with no single-row conflict in sight — the genuinely new power of Serializable. Same SQLSTATE, same retry handling, different reason.
+
+The cost is real and worth stating plainly. Serializable maintains predicate locks (`SIRead` locks) on everything every transaction reads, which is memory and bookkeeping that snapshot isolation skips. And the detector is conservative: it can abort a set of transactions that *would* have been serializable, because it tracks dangerous structures rather than proving a full cycle exists. Both properties mean every application running Serializable must wrap its transactions in a retry loop on `40001` — there is no level at which "the database handles concurrency so I don't have to" is true. The higher you set the dial, the more often correctness arrives as an abort you have to redo.
+
+## Failure modes & what to reach for
+
+**The lost update through an ORM.** Read the row, mutate it in application code, save it back — two of those concurrently, at Read Committed, and one write vanishes. The fix is to not read-then-write across statements: push the change into a single `UPDATE … SET x = x + n`, take an explicit `SELECT … FOR UPDATE` lock, or raise the transaction to Repeatable Read and retry on `40001`. The bare read-modify-write is the single most common way this anomaly ships.
+
+**The write skew that no single-row test catches.** Any invariant that spans rows — "at least one on call," "the sum of these balances stays non-negative," "this time slot holds at most one booking" — is invisible to snapshot isolation. If the invariant matters and you can't express it as a single-row constraint or a unique index, Serializable is the tool built for it. The alternative is materializing the conflict: lock a sentinel row both transactions must touch, which turns the write skew into a write-write conflict the lower levels *can* catch.
+
+**The retry loop you didn't write.** Repeatable Read and Serializable both signal contention by aborting transactions, not by blocking them. Code that runs at these levels without catching `40001` and retrying doesn't get correctness — it gets unhandled exceptions under load. The retry is not optional; it is how these levels deliver their guarantee.
+
+## What real Postgres adds
+
+The sim runs two transactions over a handful of rows and models a snapshot as one commit counter. Real snapshots are an `(xmin, xmax, xip[])` triple checked against commit status, and the visibility rules carry the full weight of the [MVCC machinery](/mvcc-bloat). The SSI detector here is the textbook pivot rule applied to row-level reads; the real implementation tracks `SIReadLock`s at tuple and page granularity, escalates them under memory pressure, handles read-only-transaction optimizations, and can abort a different member of the cycle than the one whose commit closes it. The direction of the simplification is always the same: the real thing catches at least as much, at more cost, with more corner cases. None of it changes the shape of the dial — three policies for one timestamp, plus a graph check at the top.
+
+## What to do about it
+
+Know your default. Most stacks run Read Committed, which means you have already agreed to ship lost updates on any read-modify-write and to let multi-row invariants drift. That is usually fine, because most invariants are single-row and most reads don't get overwritten — but it is a choice, and now it is a deliberate one. When an invariant spans rows and matters, reach for Serializable and write the retry loop. When a single read-modify-write matters, fix that statement rather than raising the whole transaction's level. And when you read "Repeatable Read" in a config and assume it means serializable, remember the rota: two consistent snapshots, one impossible result, zero doctors on call.
+
+## Sources
+
+- PostgreSQL docs, [Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html) — the four standard levels and the three Postgres implements; the per-statement vs per-transaction snapshot rule; Repeatable Read preventing phantom reads (stronger than the standard); the `could not serialize access due to concurrent update` and `could not serialize access due to read/write dependencies among transactions` errors; first-updater-wins; the write-skew worked example; the requirement that applications retry serialization failures and the `SIRead` predicate-lock cost of Serializable.
+- PostgreSQL docs, [Concurrency Control — Introduction](https://www.postgresql.org/docs/current/mvcc-intro.html) — MVCC snapshots as the basis of isolation; reading never blocks writing.
+- PostgreSQL docs, [Explicit Locking — `SELECT … FOR UPDATE`](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS) — row locks as the lower-level alternative to raising isolation.
+- PostgreSQL docs, [Error Codes](https://www.postgresql.org/docs/current/errcodes-appendix.html) — class `40` (`40001` `serialization_failure`).
+- Michael J. Cahill, Uwe Röhm, Alan D. Fekete, ["Serializable Isolation for Snapshot Databases"](https://www.cs.umb.edu/~poneil/ssi-sigmod08.pdf) (SIGMOD 2008) — the pivot theorem: every cycle in the SI dependency graph contains a transaction with consecutive inbound and outbound rw-antidependency edges.
+- Dan R. K. Ports and Kevin Grittner, ["Serializable Snapshot Isolation in PostgreSQL"](https://drkp.net/papers/ssi-vldb12.pdf) (VLDB 2012) — how SSI is implemented in Postgres: `SIRead` locks, granularity and escalation, false positives, read-only optimizations.
+- Berenson, Bernstein, Gray, Melton, O'Neil, O'Neil, ["A Critique of ANSI SQL Isolation Levels"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr-95-51.pdf) (SIGMOD 1995) — anomalies as the definition of isolation levels; the introduction of write skew (A5B) and lost update (P4).
