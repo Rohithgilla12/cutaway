@@ -3,7 +3,7 @@ title: "Transaction ID wraparound, or: the clock you didn't know was ticking"
 description: "Postgres numbers every transaction with a 32-bit counter and reads visibility off a circle. Freezing keeps the oldest end of that circle from being lapped — and one held snapshot stalls freezing the same way it stalls vacuum, until the database refuses to accept writes at all."
 number: 9
 pubDate: 2026-06-18
-draft: true
+draft: false
 ---
 
 import Figure from "../../../components/Figure.astro";
