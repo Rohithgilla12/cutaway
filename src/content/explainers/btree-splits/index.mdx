@@ -27,7 +27,7 @@ Insertion is simple until a page is full. Descend from the root following separa
   <BtreeViz client:visible />
 </Figure>
 
-Leave it on **sequential** and insert a few dozen keys. Every key is the new maximum, so every insert lands in the rightmost leaf, and every split happens *there* — the `interior splits` counter stays at zero. Each split leaves the left page nearly full and starts a fresh rightmost page to catch the keys still arriving in order. The fill bars stay green, "space used" hovers near 90%, and the tree climbs to three levels through splits that all occur at the right edge. This is the happy path, and it is exactly what a `bigserial` or a timestamp key does.
+Leave it on **sequential** and insert a few dozen keys. Every key is the new maximum, so every insert lands in the rightmost leaf, and every split happens *there* — the `interior splits` counter stays at zero. Each split leaves the left page filled to the fillfactor and starts a fresh rightmost page to catch the keys still arriving in order. The fill bars stay green, "space used" sits up in the high range while the `interior splits` counter holds at zero, and the tree climbs through splits that all occur at the right edge. This is the happy path, and it is exactly what a `bigserial` or a timestamp key does.
 
 ## The thing you can break: random keys
 
