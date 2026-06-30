@@ -3,7 +3,7 @@ title: "MVCC, or: why your table is 3× bigger than your data"
 description: "Postgres never updates a row in place — every UPDATE buries the old version in the heap and trusts vacuum to sweep up later. Hold one transaction open and watch vacuum keep running while reclaiming nothing, until the table is mostly corpses and the disk alert fires."
 number: 6
 pubDate: 2026-06-12
-draft: true
+draft: false
 ---
 
 import Figure from "../../../components/Figure.astro";
