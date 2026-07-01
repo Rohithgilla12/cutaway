@@ -70,9 +70,8 @@ Budget bits per key against the false-positive rate you can live with, then hold
 
 ## Sources
 
-- **Burton H. Bloom, "Space/Time Trade-offs in Hash Coding with Allowable Errors" (1970).** The original paper: the bit-array-plus-`k`-hashes construction, the one-sided error (false positives, never false negatives), and the space/time trade-off that names it.
-- **Adam Kirsch and Michael Mitzenmacher, "Less Hashing, Same Performance: Building a Better Bloom Filter."** Source for the double-hashing scheme the sim uses — deriving `k` indices from two base hashes as `h1 + i·h2` without measurable loss in false-positive rate.
-- **RocksDB wiki, "Bloom Filter."** Grounding for the production numbers: ~10 bits/key default (≈1% FPR), full-key versus prefix filters, and the ribbon filter (6.15+) trading CPU for ~30% less memory at equal FPR.
+- **Burton H. Bloom, "Space/Time Trade-offs in Hash Coding with Allowable Errors" (1970).** The original paper: the bit-array-plus-`k`-hashes construction, the one-sided error (false positives, never false negatives), and the space/time trade-off that names it. _Communications of the ACM, 13(7), 422–426._ https://dl.acm.org/doi/10.1145/362686.362692
+- **Adam Kirsch and Michael Mitzenmacher, "Less Hashing, Same Performance: Building a Better Bloom Filter."** Source for the double-hashing scheme the sim uses — deriving `k` indices from two base hashes as `h1 + i·h2` without measurable loss in false-positive rate. _Random Structures & Algorithms, 33(2), 187–218, 2008._ https://www.eecs.harvard.edu/~michaelm/postscripts/esa2006a.pdf
+- **RocksDB wiki, "Bloom Filter."** Grounding for the production numbers: ~10 bits/key default (≈1% FPR), full-key versus prefix filters, and the ribbon filter (6.15+) trading CPU for ~30% less memory at equal FPR. https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter
+- **RocksDB blog, "Ribbon Filter" (2021).** Benchmark data confirming ribbon filter memory savings (~30%), build CPU overhead (~4× bloom), and query overhead (~20% slower than bloom). https://rocksdb.org/blog/2021/12/29/ribbon-filter.html
 - **Formulas.** False-positive rate `(1 − e^(−kn/m))^k` and optimal `k = (m/n)·ln 2`, both standard results derived from the construction above and implemented directly in the sim.
-
-_Exact citation URLs are confirmed in the verification pass._
