@@ -10,12 +10,69 @@ import Figure from "../../../components/Figure.astro";
 import BloomFilterViz from "./components/BloomFilterViz";
 import ReadAmpViz from "./components/ReadAmpViz";
 
-Placeholder prose. Replaced in Task 6.
+An LSM keeps your data spread across many sorted runs: a memtable, then a stack of on-disk levels that grow older and larger toward the bottom. A point lookup for a key that exists usually stops early — it finds the key in a recent run and returns. A point lookup for a key that does _not_ exist has no such luck. To answer "not found" honestly, it has to check every run, because the key could be hiding in any of them. Six runs deep, that's six seeks and six block reads to confirm absence. Your read amplification on a miss is N, and misses are common: every `INSERT ... ON CONFLICT`, every "does this user already exist" check, every cache-fill on a cold key.
+
+## The obvious fix costs exactly what you were avoiding
+
+You could keep an in-memory set of every key in every run. Then a miss is one hash-set lookup: absent, return, done. No disk touched.
+
+That set is an index of every key you have. Keeping it in RAM is the thing an LSM exists to avoid — the whole point of pushing cold data down to disk is that you can't afford to hold all the keys in memory. Trading N disk reads for an all-keys hash table is trading a problem you have for a bill you can't pay.
+
+What you actually want is weaker than an index. You don't need to know _where_ a key is, or even that it's definitely present. You only need to rule runs out. A structure that answers "definitely not in this run" for most misses, and "might be, go look" for the rest, would let you skip the runs it rules out. If it's small enough, you can afford one per run and keep them all resident.
+
+## A bit array and a handful of hashes
+
+That structure is a bloom filter. It's a bit array of `m` bits, all zero to start, plus `k` hash functions. To insert a key, hash it `k` ways, and set the `k` bits those hashes point at. To query a key, hash it the same `k` ways and look at those `k` bits. If any one of them is zero, the key was never inserted — return NO, definitely absent. If all `k` are one, return MAYBE.
+
+The asymmetry is the whole idea. A NO is a proof: inserting the key would have set those bits, so a zero anywhere means it was never inserted. A MAYBE is a suspicion: those bits are all set, but they might have been set by other keys that happened to collide. There are no false negatives, only false positives.
+
+Costs are small. The filter in the sim below uses two FNV-1a base hashes and derives its `k` indices by combining them (the Kirsch–Mitzenmacher trick: one extra multiply-add per index instead of a fresh hash). At 8–10 bits per key it holds no keys at all, so a run of a million keys needs roughly a megabyte of filter, not the tens of megabytes the keys themselves occupy.
 
 <Figure number={1} label="ONE FILTER, UP CLOSE">
   <BloomFilterViz client:visible />
 </Figure>
 
+## Reading the filter
+
+Insert a few keys and watch bits light up. Query a present key and all its probed bits are already set — MAYBE, correctly. Query an absent key and, while the fill is low, at least one probed bit is still zero — NO, and you've skipped a disk read for free. Keep inserting. The measured false-positive rate (run against 300 keys that were never inserted) climbs, and it tracks the theoretical curve, `(1 − e^(−kn/m))^k`, closely once you have more than a handful of keys.
+
+The knob under all of this is `m/n` — bits per key. It's the only thing that sets the floor on your error rate. `n` is how many keys you've stored, `m` is how many bits you gave the filter, and `k` is how many bits each key touches. Fix bits per key and the false-positive rate is essentially fixed too; the readout's `fill` (fraction of bits set to one) is the mechanism you can see. A filter that's 50% full gives a much lower MAYBE rate than one that's 90% full, because a random query is likelier to land on a zero.
+
+(Real filters pack bits into cache-line-sized blocks so a query touches one cache line instead of `k` scattered ones. The sim ignores that — it spreads bits across the whole array so you can watch them fill.)
+
+## Where it breaks
+
+The filter has three failure modes worth knowing before you deploy one.
+
+**Saturation.** Push bits per key down, or push key count up, and the array fills toward all-ones. Every bit set means every query finds its `k` bits set, so every query returns MAYBE. A saturated filter is not wrong — it never gives a false negative — but it's useless: it rules nothing out, so you probe every run anyway and pay for the filter's memory on top. Drag `bits/key` toward 2 in FIG.01 and watch the fill and the FPR both march toward the ceiling. This is the failure that matters in production, because it creeps: a filter sized for last year's key count silently degrades as the data grows under it.
+
+**Over-hashing.** More hash functions sounds like more precision, and for a fixed fill it is — more bits to disagree on means a stricter NO. But each insert now sets more bits, so the array fills faster, and a fuller array means more collisions. Past a point, adding `k` makes the false-positive rate _worse_, not better. There's a sweet spot: optimal `k = (m/n)·ln 2`, which is where the filter ends up about half full. FIG.01 shows the optimal `k` for your current fill and turns it green when your slider matches. Set `k` far above it and watch the FPR climb while you thought you were tightening the filter.
+
+**You can't delete.** Deleting a key means clearing its `k` bits. But bits are shared — a bit you set for `user:42` may also be the bit that proves `user:99` is present. Clear it and a later query for `user:99` finds a zero and returns NO for a key that's actually there. That's a false negative, the one thing a bloom filter is never allowed to produce. So a plain bloom filter is insert-and-query only. (Counting bloom filters replace each bit with a small counter to allow deletes at several times the space; we don't cover them here. In an LSM it rarely comes up — a run's filter is built once when the run is written and thrown away when the run is compacted, so nothing ever deletes from a live filter.)
+
+## What the databases actually ship
+
+RocksDB builds a bloom filter per SST file and defaults to about 10 bits per key, which lands the false-positive rate near 1%. That's the number to anchor on: ~10 bits/key, ~1% FPR, one in a hundred misses still pays for a wasted block read, ninety-nine in a hundred skip it.
+
+RocksDB offers two shapes. A **full-key filter** answers point lookups — "is this exact key in this file?" — and nothing else. A **prefix filter** hashes a configured key prefix instead of the whole key, so it can answer "might any key with this prefix be in this file?", which approximates pruning files for a range scan whose keys share a prefix. Plain bloom filters can't help a general range scan at all: `WHERE k BETWEEN a AND z` isn't a membership test, so there's nothing for the filter to rule out. Prefix filters are the narrow exception, and only when your scans align with a prefix you chose in advance.
+
+Newer RocksDB (6.15+) adds the **ribbon filter**, which hits the same false-positive rate as a bloom filter for roughly 30% less memory, at the cost of more CPU to build and query. On a memory-bound node where filters compete with the block cache for RAM, that trade is often worth it; on a CPU-bound one it isn't.
+
 <Figure number={2} label="THE READ-AMP PAYOFF">
   <ReadAmpViz client:visible />
 </Figure>
+
+FIG.02 runs a lookup down six runs — memtable, L0, then L1 and below — and reports read-amp as the number of runs actually probed. Look up a missing key with healthy filters and most runs answer NO on the spot: read-amp drops far below six, often to zero. Now drag `bits/key` toward 2. The filters saturate, their NOs turn to MAYBEs, and the lookup is forced to probe run after run. Read-amp climbs back toward N — the exact cost the filter was there to erase. Starve the filter of bits and you've paid for it without buying anything.
+
+## Deciding
+
+Budget bits per key against the false-positive rate you can live with, then hold it as the data grows — a filter sized once and never resized is a filter that saturates on schedule. Ten bits per key and ~1% is a fine default; if a missed skip is expensive, spend more bits before you add hash functions, because past optimal `k` the extra hashing hurts. And keep the scope honest: filters erase read amplification on point-lookup misses. A range scan gets nothing from them, prefix filters aside. If your read path is scans, the bit array in front of each run is dead weight, and the money belongs somewhere else.
+
+## Sources
+
+- **Burton H. Bloom, "Space/Time Trade-offs in Hash Coding with Allowable Errors" (1970).** The original paper: the bit-array-plus-`k`-hashes construction, the one-sided error (false positives, never false negatives), and the space/time trade-off that names it.
+- **Adam Kirsch and Michael Mitzenmacher, "Less Hashing, Same Performance: Building a Better Bloom Filter."** Source for the double-hashing scheme the sim uses — deriving `k` indices from two base hashes as `h1 + i·h2` without measurable loss in false-positive rate.
+- **RocksDB wiki, "Bloom Filter."** Grounding for the production numbers: ~10 bits/key default (≈1% FPR), full-key versus prefix filters, and the ribbon filter (6.15+) trading CPU for ~30% less memory at equal FPR.
+- **Formulas.** False-positive rate `(1 − e^(−kn/m))^k` and optimal `k = (m/n)·ln 2`, both standard results derived from the construction above and implemented directly in the sim.
+
+_Exact citation URLs are confirmed in the verification pass._
