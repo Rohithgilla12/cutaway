@@ -24,9 +24,8 @@ passes (0 errors, 0 warnings).
 
 ## A. FPR formula and optimal k
 
-1. **`FPR = (1 − e^(−kn/m))^k`** ✅ Standard result derived from the Bloom 1970 construction;
-   reproduced in every authoritative treatment (JHU lecture notes, ECE UTH notes, the K&M
-   paper itself). Implemented in `bloomSim.ts → theoreticalFpr()` as
+1. **`FPR = (1 − e^(−kn/m))^k`** ✅ Standard result derived from the Bloom 1970 construction
+   and restated in the K&M paper. Implemented in `bloomSim.ts → theoreticalFpr()` as
    `Math.pow(1 - Math.exp((-k * added) / m), k)` — exact match.
 
 2. **`Optimal k = (m/n)·ln 2`** ✅ Standard result from minimising FPR over k; at this k the
@@ -47,8 +46,9 @@ passes (0 errors, 0 warnings).
 ## C. Kirsch–Mitzenmacher double-hashing
 
 5. **"two FNV-1a base hashes … Kirsch–Mitzenmacher trick: one extra multiply-add per index
-   instead of a fresh hash"** ✅ K&M paper (Harvard postprint, confirmed fetchable):
-   scheme is g_i(x) = h1(x) + i·h2(x) mod m — one multiply (by i) and one add per index.
+   instead of a fresh hash"** ✅ K&M paper (Harvard postprint). The PDF fetched as binary, so
+   the scheme was confirmed via the paper's title/abstract and its exact correspondence to the
+   sim code, not a verbatim quote: g_i(x) = h1(x) + i·h2(x) mod m — one multiply (by i) and one add per index.
    `bloomSim.ts → positions()`: `(h1 + Math.imul(i, h2)) >>> 0) % m` — exact match.
    The "one extra multiply-add" description is accurate: one `Math.imul` + one addition
    replaces a full hash call.
