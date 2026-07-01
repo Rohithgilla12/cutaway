@@ -50,7 +50,7 @@ export default function ReadAmpViz() {
 
       <label style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 12 }}>
         bits/key = {bitsPerKey} (drag toward 2 to starve the filters)
-        <input type="range" min={2} max={20} value={bitsPerKey} onChange={(e) => setBitsPerKey(+e.target.value)} />
+        <input type="range" min={2} max={20} value={bitsPerKey} onChange={(e) => setBitsPerKey(+e.target.value)} style={{ width: 200 }} aria-label="bits per key" />
       </label>
     </div>
   );

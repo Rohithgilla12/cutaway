@@ -93,11 +93,11 @@ export default function BloomFilterViz() {
       <div style={{ display: "flex", flexWrap: "wrap", gap: 24, marginTop: 12 }}>
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           bits/key = {bitsPerKey}
-          <input type="range" min={2} max={20} value={bitsPerKey} onChange={(e) => setBitsPerKey(+e.target.value)} />
+          <input type="range" min={2} max={20} value={bitsPerKey} onChange={(e) => setBitsPerKey(+e.target.value)} style={{ width: 160 }} aria-label="bits per key" />
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           k = {k}
-          <input type="range" min={1} max={12} value={k} onChange={(e) => setK(+e.target.value)} />
+          <input type="range" min={1} max={12} value={k} onChange={(e) => setK(+e.target.value)} style={{ width: 160 }} aria-label="number of hash functions k" />
         </label>
       </div>
     </div>
