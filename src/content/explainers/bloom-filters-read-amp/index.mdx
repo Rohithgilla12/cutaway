@@ -3,7 +3,7 @@ title: "Bloom filters, or: the cheapest way to skip a disk read"
 description: "A bloom filter answers 'is this key here?' in a few bytes per key — definitely-no, or maybe. Insert keys into one filter, starve it of memory, and watch its maybes pile up until it can't skip anything; then see why that single bit array decides how many sorted runs an LSM read has to touch."
 number: 12
 pubDate: 2026-06-30
-draft: true
+draft: false
 ---
 
 import Figure from "../../../components/Figure.astro";
